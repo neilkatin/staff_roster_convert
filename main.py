@@ -64,9 +64,9 @@ def main() -> None:
 
 
     read_roster(book_out, 'Staff Requests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
-    read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, ROSTER_FIXUPS)
-    read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, ROSTER_FIXUPS, freeze_col="C")
-    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ROSTER_FIXUPS, suppress_columns={'Z':True})
+    read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
+    read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C")
+    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
     # now copy and filter the 'orig' sheet to the others
     copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Needs_Sup", filter_row_needs_sup, ROSTER_FIXUPS)
@@ -113,7 +113,7 @@ def fetch_workforce_reports(config, dro_id, token_filename):
         if name_before_underscore is not None:
             name_type  = name_before_underscore.group(1)
 
-        log.debug(f"attachment { attachment.name } name_type { name_type } size { attachment.size }")
+        #log.debug(f"attachment { attachment.name } name_type { name_type } size { attachment.size }")
         attach_dict[name_type] = base64.b64decode(attachment.content)
 
     return attach_dict
@@ -201,6 +201,92 @@ ROSTER_FIXUPS = {
                        },
     }
 
+ARRIVAL_FIXUPS = {
+        'Region': { 'width': 6, },
+        'Status': { 'width': 8, },
+        'Resp': { 'width': 6, },
+        'Category': { 'width': 6, },
+        'Category': { 'width': 6, },
+        'Gender': { 'width': 10, },
+        'T&M': { 'width': 8, },
+        'Trans': { 'width': 8, },
+        'Flight Arrival Date/Time': { 'width': 8, },
+        'Type': { 'width': 8, },
+        'GAP': { 'width': 15, },
+        '# Deploy': { 'width': 15, },
+        'Texts?': { 'width': 8, },
+        'Arrive date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd",
+                     },
+        'Flight Arrival Date/Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        }
+
+
+
+AIR_FIXUPS = {
+        'Departure City': { 'width': 16 },
+        'Arrival City': { 'width': 16 },
+        'Ticketed': { 'width': 4 },
+        'Airline': { 'width': 15 },
+        'Flight': { 'width': 8 },
+        'Region name': { 'width': 24 },
+        'Reporting or Work location': { 'width': 24 },
+        'District': { 'width': 10 },
+
+        'Last action date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        'Exp Arrival': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd",
+                     },
+        'Departure time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        'Arrival time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        }
+
+
+SHIFTS_FIXUPS = {
+        'Shift Name': { 'width': 30 },
+        'County': { 'width': 24 },
+        'Registration Status': { 'width': 16 },
+        'Current Volunteer Status': { 'width': 20 },
+        'District (of shift)': { 'width': 20 },
+        'County (residence)': { 'width': 24 },
+        'Registration Comments': { 'width': 24 },
+        'Name': { 'width': 24 },
+        'Registration Status': { 'width': 24 },
+        'Ever DEBV/P-DEBV for this DRO': { 'width': 16 },
+        'Email': { 'width': 24 },
+
+        'Start Date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd",
+                     },
+        'Start Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        'End Date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        'Date Registered/Last Changed': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        'End Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+                     'number_format': "yyyy-mm-dd hh:mm",
+                     'width': 18,
+                     },
+        }
 
 def row_fixups(fixup_defs, label_row):
 
@@ -282,7 +368,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
+    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
@@ -342,7 +428,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 # copy from the 'orig' sheet to a new sheet, filtering entries
 def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups):
     
-    log.debug(f"copy_sheet: sheet_name { sheet_name } label_row { label_row }")
+    #log.debug(f"copy_sheet: sheet_name { sheet_name } label_row { label_row }")
     #sheet_new = wb.create_sheet(sheet_name, len(wb.sheetnames)-1)
     sheet_new = wb.create_sheet(sheet_name, 0)
 
@@ -390,7 +476,7 @@ def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups):
         last_col_letter = openpyxl.utils.get_column_letter(max_col)
 
         table_ref = f"A1:{ last_col_letter }{ output_row -1 }"
-        log.debug(f"table { sheet_name } table_ref '{ table_ref }'")
+        #log.debug(f"table { sheet_name } table_ref '{ table_ref }'")
         table_new = openpyxl.worksheet.table.Table(displayName=sheet_name, ref=table_ref)
         sheet_new.add_table(table_new)
         sheet_new.freeze_panes = f"B2"

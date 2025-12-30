@@ -1,5 +1,5 @@
 # config.py
 
-TOKEN_FILENAME_AVIS = 'o365_token-avis.txt'
+TOKEN_FILENAME = 'o365_token.txt'
 
 PROGRAM_EMAIL = 'DR-Report-Automation@redcross.org'

@@ -41,7 +41,8 @@ def main() -> None:
 
     config = neil_tools.init_config(config_static, ".env")
 
-    report_dict = fetch_workforce_reports(config, "033-26", config.TOKEN_FILENAME_AVIS)
+    o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
+    report_dict = o365.fetch_workforce_reports("033-26")
 
     errors = False
     book_out = openpyxl.Workbook()
@@ -88,72 +89,6 @@ def main() -> None:
 
     book_out.save("test.xlsx")
 
-
-
-MATCH_TO_FIRST_UNDERSCORE = re.compile(r"^([^_]+)_")
-def fetch_workforce_reports(config, dro_id, token_filename):
-
-    account = init_o365(config, token_filename)
-
-    message_match_string = f"DR { dro_id } Automated Workforce Reports"
-    message = search_mail(account, config.PROGRAM_EMAIL, message_match_string)
-
-    if message is None:
-        error = f"Could not find an email that matches '{ message_match_string }'"
-        log.fatal(error)
-        raise(Exception(error))
-
-    attach_dict = {}
-    # read the attachments
-    for attachment in message.attachments:
-        attach_name = attachment.name
-        name_type = attach_name
-        name_before_underscore = MATCH_TO_FIRST_UNDERSCORE.match(attach_name)
-
-        if name_before_underscore is not None:
-            name_type  = name_before_underscore.group(1)
-
-        #log.debug(f"attachment { attachment.name } name_type { name_type } size { attachment.size }")
-        attach_dict[name_type] = base64.b64decode(attachment.content)
-
-    return attach_dict
-
-
-
-
-
-def search_mail(account, email_address, subj_pattern):
-
-    mailbox = account.mailbox(resource=email_address)
-    builder = mailbox.new_query()
-    dt = datetime.datetime(1900, 1, 1)
-    matcher = builder.chain_and(
-            builder.greater('sentDateTime', dt),
-            builder.contains("subject", subj_pattern))
-
-    messages = mailbox.get_messages(query=matcher, order_by="sentDateTime desc", limit=1, download_attachments=True)
-    message = next(messages, None)
-
-    if message is not None:
-        log.debug(f"returning message { message.subject } received { message.received }")
-    else:
-        log.debug(f"No message found")
-
-    return message
-
-
-
-
-def init_o365(config, token_filename):
-    """ do initial setup to get a handle on office 365 graph api """
-
-    o365 = arc_o365.arc_o365.arc_o365(config, token_filename=token_filename, timezone="America/Los_Angeles")
-
-    account = o365.get_account()
-    if account is None:
-        raise Exception("could not access office 365 graph api")
-
-    return account
 
 
 RIGHT_ALIGNED = openpyxl.styles.Alignment(horizontal="right")

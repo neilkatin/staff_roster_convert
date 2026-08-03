@@ -30,7 +30,10 @@ from neil_tools import spreadsheet_tools
 # index of column label row, origin zero
 STAFF_ROSTER_LABEL_ROW = 5
 ORIG_SHEET_NAME = "Orig"
+REPORT_DATE_FORMAT = "%Y-%m-%d %H-%M-%S %Z"
 
+
+NOW = datetime.datetime.now().astimezone()
 
 
 def main() -> None:
@@ -39,55 +42,65 @@ def main() -> None:
         logging.getLogger().setLevel(logging.DEBUG)
     log.debug("running...")
 
+    # read static configuration
     config = neil_tools.init_config(config_static, ".env")
 
+    # make sure we know about this DRO
+    dr_config = config.DRConfig.lookup_dr(args.dr_id)
+    if dr_config is None:
+        log.fatal(f"no configuration on file for '{ args.dr_id }'")
+        sys.exit(1)
+
     o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
-    report_dict = o365.fetch_workforce_reports("033-26")
+    report_dict = o365.fetch_workforce_reports(dr_config.dr_id)
+    report_date = report_dict['created']
+    report_date_stamp = report_date.strftime(REPORT_DATE_FORMAT)
+    log.debug(f"report date is '{ report_date }', stamp '{ report_date_stamp }'")
 
     errors = False
     book_out = openpyxl.Workbook()
 
     # do the 'orig' roster first so it is at the end of the list
-    sheet_orig = read_roster(book_out, ORIG_SHEET_NAME, report_dict['Staff Roster'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
+    sheet_orig = read_roster(book_out, ORIG_SHEET_NAME, report_dict['Staff Roster - Cumulative'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
+    sheet_roster = copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster", filter_row_active, ROSTER_FIXUPS, suppress_columns={'I': True})
 
-    # now copy and filter the 'orig' sheet to the others
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Active", filter_row_active)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "MC", filter_row_mc)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "CC", filter_row_cc)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "LOG", filter_row_log)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "ER", filter_row_er)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "IP", filter_row_ip)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "WF", filter_row_wf)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "OM", filter_row_om)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Overstayed", filter_row_overstayed)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Days_2", filter_row_2_days)
-    #copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Needs_Sup", filter_row_needs_sup)
-
-
-    read_roster(book_out, 'Staff Requests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
+    read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
     read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
-    read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C")
+    read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C", suppress_columns={'V':True})
     read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
     # now copy and filter the 'orig' sheet to the others
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Needs_Sup", filter_row_needs_sup, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Days_2", filter_row_2_days, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Overstayed", filter_row_overstayed, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "OM", filter_row_om, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "WF", filter_row_wf, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "IP", filter_row_ip, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "ER", filter_row_er, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "LOG", filter_row_log, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "CC", filter_row_cc, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "MC", filter_row_mc, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster", filter_row_active, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "Need_SMS", filter_row_sms, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "Needs_Sup", filter_row_needs_sup, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "Days_2", filter_row_2_days, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "Overstayed", filter_row_overstayed, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "OM", filter_row_om, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "WF", filter_row_wf, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "IP", filter_row_ip, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "ER", filter_row_er, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "LOG", filter_row_log, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "CC", filter_row_cc, ROSTER_FIXUPS)
+    copy_sheet(book_out, sheet_roster, 0, "MC", filter_row_mc, ROSTER_FIXUPS)
 
     del book_out['Sheet']
+
+    # move reoster to beginning of workbook
+    # we should be using workbook.move_sheet(), but that didn't seem to work
+    book_out.remove(sheet_roster)
+    book_out._add_sheet(sheet_roster, index=0)
 
     if errors:
         sys.exit(1)
 
-    book_out.save("test.xlsx")
+    roster_file_name = f"DR{ dr_config.dr_id } Staffing Report { report_date_stamp }.xlsx"
+
+    book_out.save(roster_file_name)
+
+    if args.send or args.test_send:
+        send_roster(dr_config, args, o365.account, roster_file_name, report_date)
+
+    if not args.save:
+        os.remove(roster_file_name)
 
 
 
@@ -100,6 +113,7 @@ ROSTER_FIXUPS = {
         'Res': { 'width': 4, },
         'T&M': { 'width': 6, },
         'GAP(s)': { 'width': 15, },
+        'G/A/P': { 'width': 15, },
         'District': { 'width': 5, },
         'Qualification (assignment)': { 'width': 5, },
         'Current/Last Supervisor': { 'width': 30, },
@@ -134,6 +148,7 @@ ROSTER_FIXUPS = {
                        'alignment': RIGHT_ALIGNED,
                        'convert_value': lambda x: x if isinstance(x, int) else x if  x == '' or x == 'n/a' else int(x),
                        },
+        'On Job': { 'width': 4, 'convert_value': lambda x: int(x) if isinstance(x, str) else x },
     }
 
 ARRIVAL_FIXUPS = {
@@ -223,23 +238,35 @@ SHIFTS_FIXUPS = {
                      },
         }
 
-def row_fixups(fixup_defs, label_row):
+
+
+
+def row_fixups(fixup_defs, label_row, supress_columns):
 
 
     fixups_by_col = {}
 
     # generate a mapping from column name to column index
     column_name_map = {}
+    output_column = 0
 
     for c in range(0, len(label_row)):
         name = label_row[c]
 
-        if name in fixup_defs:
-            fixups_by_col[c] = fixup_defs[name]
-        else:
-            fixups_by_col[c] = {}
+        col_letter = openpyxl.utils.get_column_letter(c +1)
+        if col_letter in supress_columns:
+            # skip this column
+            #log.debug(f"read_roster: suppressing columm '{ col_letter }' c { c } output_column { output_column }")
+            continue
 
-        column_name_map[name] = c
+
+        if name in fixup_defs:
+            fixups_by_col[output_column] = fixup_defs[name]
+        else:
+            fixups_by_col[output_column] = {}
+
+        column_name_map[name] = output_column
+        output_column += 1
 
 
     return fixups_by_col, column_name_map
@@ -274,6 +301,7 @@ filter_row_active = { 'Released': lambda x: x == '' }
 filter_row_overstayed = { 'DaysRemain': lambda x: x != '' and x != 'n/a' and x is not None and int(x) < 0 }
 filter_row_2_days = { 'DaysRemain': lambda x: x != '' and x != 'n/a' and x is not None and int(x) == 2 }
 filter_row_needs_sup = { 'Current/Last Supervisor': lambda x: x != '' and x is not None and x == 'Needs Supervisor' }
+filter_row_sms = { 'Texts?': lambda x: x != 'opt-in' }
 filter_row_mc = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('MC/') }
 filter_row_cc = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('CC/') }
 filter_row_log = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('LOG/') }
@@ -287,12 +315,15 @@ def filter_row(row, row_name_map, filter_defs):
 
     for name, func in filter_defs.items():
         #log.debug(f"filter_row: name '{ name }'")
-        c = row_name_map[name]
-        val = row[c]
-        #log.debug(f"filter_row: name { name } c { c } val '{ val }' ")
-        if not func(val):
-            #log.debug(f"filter_row: name { name } val '{ val }' returning False")
-            return False
+
+        # ignore filtered columns
+        if name in row_name_map:
+            c = row_name_map[name]
+            val = row[c]
+            #log.debug(f"filter_row: name { name } c { c } val '{ val }' ")
+            if not func(val):
+                #log.debug(f"filter_row: name { name } val '{ val }' returning False")
+                return False
         
     #log.debug(f"filter_row: returning True")
     return True
@@ -303,7 +334,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
+    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
@@ -318,9 +349,17 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     sheet_orig.title = sheet_name
 
     # set column attributes
-    fixups_by_col, column_name_map = row_fixups(fixups, label_values)
+    fixups_by_col, column_name_map = row_fixups(fixups, label_values, suppress_columns)
+    output_col = 0
     for c in range(0, len(label_values)):
-        fixup_cell_header(sheet_orig, c, fixups_by_col[c])
+        col_letter = openpyxl.utils.get_column_letter(c +1)
+        if col_letter in suppress_columns:
+            continue
+
+        if output_col not in fixups_by_col:
+            log.error(f"read_roster: missing key: c { c } col_letter '{ col_letter }' output_col { output_col }")
+        fixup_cell_header(sheet_orig, output_col, fixups_by_col[output_col])
+        output_col += 1
         
 
     # copy cells
@@ -342,16 +381,16 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
             # don't fix up cells before the actual data
             if r > label_row:
-                fixup_cell(cell, fixups_by_col[c])
+                fixup_cell(cell, fixups_by_col[output_c])
 
             output_c = output_c + 1
 
 
     # make a table if there is data
-    if sheet_in.nrows > label_row + 1:
+    if sheet_orig.max_row > label_row:
         last_col_letter = openpyxl.utils.get_column_letter(sheet_orig.max_column)
-        table_ref = f"A{label_row + 1}:{ last_col_letter }{ sheet_in.nrows }"
-        log.debug(f"adding table; table '{ sheet_name }' table_ref '{ table_ref }'")
+        table_ref = f"A{label_row + 1}:{ last_col_letter }{ sheet_orig.max_row }"
+        log.debug(f"adding table: table '{ sheet_name }' table_ref '{ table_ref }'")
         table = openpyxl.worksheet.table.Table(displayName=sheet_name, ref=table_ref)
         sheet_orig.add_table(table)
 
@@ -361,7 +400,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
 # copy from the 'orig' sheet to a new sheet, filtering entries
-def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups):
+def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_columns: dict[str] = {}):
     
     #log.debug(f"copy_sheet: sheet_name { sheet_name } label_row { label_row }")
     #sheet_new = wb.create_sheet(sheet_name, len(wb.sheetnames)-1)
@@ -370,9 +409,17 @@ def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups):
     label_values = list(next(sheet_orig.iter_rows(min_row=label_row +1, max_row=label_row +2, values_only=True)))
 
     # set column attributes
-    fixups_by_col, column_name_map = row_fixups(fixups, label_values)
+    fixups_by_col, column_name_map = row_fixups(fixups, label_values, suppress_columns)
+    output_col = 0
     for c in range(0, len(label_values)):
-        fixup_cell_header(sheet_new, c, fixups_by_col[c])
+        col_letter = openpyxl.utils.get_column_letter(c +1)
+        if col_letter in suppress_columns:
+            continue
+
+        if output_col not in fixups_by_col:
+            log.error(f"copy_sheet: c not in fixups_by col.  c { c } output_col { output_col } col_letter { col_letter }")
+        fixup_cell_header(sheet_new, output_col, fixups_by_col[output_col])
+        output_col += 1
 
     # these two are origin one indexes
     max_col = sheet_orig.max_column
@@ -395,27 +442,117 @@ def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups):
             #log.debug(f"row { r } output_row { output_row } not included")
             continue
 
+        output_col = 0
         for c in range(0, max_col):
-            cell = sheet_new.cell(row=output_row, column=c +1, value=row_values[c])
+            col_letter = openpyxl.utils.get_column_letter(c+1)
+            if col_letter in suppress_columns:
+                # skip this column
+                #log.debug(f"copy_sheet: suppressing columm '{ col_letter }'")
+                continue
+
+            cell = sheet_new.cell(row=output_row, column=output_col +1, value=row_values[c])
 
             # don't fix up cells before the actual data
             if r > label_row:
-                fixup_cell(cell, fixups_by_col[c])
+                fixup_cell(cell, fixups_by_col[output_col])
+            output_col += 1
 
         # increment the output row
         output_row = output_row + 1
 
 
     # make a table if there is data
-    if output_row > 2:
-        last_col_letter = openpyxl.utils.get_column_letter(max_col)
+    if sheet_new.max_row > 2:
+        last_col_letter = openpyxl.utils.get_column_letter(sheet_new.max_column)
 
-        table_ref = f"A1:{ last_col_letter }{ output_row -1 }"
-        #log.debug(f"table { sheet_name } table_ref '{ table_ref }'")
+        table_ref = f"A1:{ last_col_letter }{ sheet_new.max_row }"
+        log.debug(f"copy_sheet: adding table { sheet_name } table_ref '{ table_ref }'")
         table_new = openpyxl.worksheet.table.Table(displayName=sheet_name, ref=table_ref)
         sheet_new.add_table(table_new)
         sheet_new.freeze_panes = f"B2"
 
+    return sheet_new
+
+
+#
+# wrapper for sending out the roster
+#
+def send_roster(dr_config, args, account, file_name, report_date):
+
+    warn_days = 2
+    if report_date < NOW - datetime.timedelta(days=warn_days):
+        date_warning = f"<span style='background-color:yellow;'>WARNING: staff report is more than { warn_days } days old<span>."
+    else:
+        date_warning = ""
+
+    message_body = \
+f"""
+<p>
+This report is based on the staff roster dated { report_date.strftime(REPORT_DATE_FORMAT) }.
+</p>
+{ date_warning }
+
+Hello everyone.  This is a spreadsheet based on the automated staffing reports, but reorganized to hopefully be easier to use.
+"""
+
+    send_report_common(dr_config, args, account, file_name, "Staffing Report", message_body)
+
+
+def send_report_common(dr_config, args, account, file_name, report_type, message_body):
+
+    #message = account.new_message(resource=dr_config.send_email)
+    message = account.new_message()
+
+    if args.test_send:
+        message.bcc.add(dr_config.to_test)
+
+    #if extra_recipients != None and len(extra_recipients) > 0:
+    #    log.debug(f"adding extra recipients { extra_recipients }")
+
+    if args.send:
+        #if extra_recipients != None and len(extra_recipients) > 0:
+        #    message.bcc.add(extra_recipients)
+
+        message.bcc.add(dr_config.to_test)
+        message.bcc.add(dr_config.to_email)
+        log.debug(f"sending { file_name } to { dr_config.to_email }")
+        posting = f"<p>This message was sent to { dr_config.to_email }.  Please do *not* reply to the whole list</p>\n"
+    else:
+        log.debug(f"not sending { file_name } to { dr_config.to_email }")
+        posting = \
+f"""
+<p>
+DEBUG Version: not sent to the list
+</p>
+"""
+
+    message.body = \
+f"""
+<!DOCTYPE html>
+<html>
+<meta http-equiv="Content-type" content="text/html" charset="UTF8" />
+<title>DR{ dr_config.dr_id } { report_type }</title>
+</head>
+<body>
+
+<h1>DR{ dr_config.dr_id } { report_type }</h1>
+{ posting }
+
+{ message_body }
+
+</body>
+</html>
+"""
+
+
+    message.subject = file_name
+    message.attachments.add( file_name )
+
+    try:
+        message.send(save_to_sent_folder=True)
+    except requests.RequestException as e:
+        log.error(f"got an error: { e }, response json { e.response.json }")
+        raise e
 
 
 def parse_args() -> argparse.Namespace:
@@ -423,7 +560,10 @@ def parse_args() -> argparse.Namespace:
             description="tool to convert staffing reports into a more usefull form",
             allow_abbrev=False)
     parser.add_argument("--debug", help="turn on debugging output", action="store_true")
-    parser.add_argument("--out", help="file to save output into", action="store_true")
+    parser.add_argument("--save", help="retain output file", action="store_true")
+    parser.add_argument("--send", help="send emails out", action="store_true")
+    parser.add_argument("--test-send", help="send emails out, but to the test email box", action="store_true")
+    parser.add_argument("--dr-id", help="Identifier for the DRO; must match the staffing report", required=True, action="store")
 
     args = parser.parse_args()
 

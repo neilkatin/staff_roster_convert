@@ -10,6 +10,9 @@ import datetime
 import io
 import typing
 import base64
+import pathlib
+import requests
+import requests.exceptions
 
 import xlrd
 import dotenv
@@ -19,7 +22,8 @@ import openpyxl.utils
 import openpyxl.styles
 import openpyxl.styles.colors
 import openpyxl.writer.excel
-import O365
+import openpyxl.utils.cell
+import O365.excel
 
 import config as config_static
 import neil_tools
@@ -52,6 +56,7 @@ def main() -> None:
         sys.exit(1)
 
     o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
+
     report_dict = o365.fetch_workforce_reports(dr_config.dr_id)
     report_date = report_dict['created']
     report_date_stamp = report_date.strftime(REPORT_DATE_FORMAT)
@@ -62,7 +67,35 @@ def main() -> None:
 
     # do the 'orig' roster first so it is at the end of the list
     sheet_orig = read_roster(book_out, ORIG_SHEET_NAME, report_dict['Staff Roster - Cumulative'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
-    sheet_roster = copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster", filter_row_active, ROSTER_FIXUPS, suppress_columns={'I': True})
+    sheet_roster1 = copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster1", filter_row_active, ROSTER_FIXUPS)
+
+    # delete column 'I': the Released column
+    # first delete the column
+    sheet_roster1.delete_cols(openpyxl.utils.cell.column_index_from_string('I'), 1)
+    # adjust the table size
+    sheet_name, table_range = find_table_by_name(book_out, 'Roster1')
+    log.debug(f"sheet { sheet_name } range { table_range }")
+
+    # get the range in terms of min/max
+    # tuple is min_col, min_row, max_col, max_row
+    tuple_range = openpyxl.utils.cell.range_boundaries(table_range)
+    log.debug(f"table range_boundaries { tuple_range }")
+    # convert back to A1:Z999 style format, reducing the max column by one for the deleted column
+    min_col = openpyxl.utils.get_column_letter(tuple_range[0])
+    min_row = tuple_range[1]
+    max_col = openpyxl.utils.get_column_letter(tuple_range[2] -1)
+    max_row = tuple_range[3]
+    table_ref = f"{min_col}{min_row}:{max_col}{max_row}"
+    log.debug(f"resizing table: table_ref '{ table_ref }'")
+    table = openpyxl.worksheet.table.Table(displayName='Roster1', ref=table_ref)
+    # delete the old table
+    del sheet_roster1.tables['Roster1']
+    # add the new one
+    sheet_roster1.add_table(table)
+
+    # and copy it to a new sheet to fix up all the column header widths
+    sheet_roster = copy_sheet(book_out, sheet_roster1, 0, "Roster", {}, ROSTER_FIXUPS)
+
 
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
     read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
@@ -89,20 +122,397 @@ def main() -> None:
     book_out.remove(sheet_roster)
     book_out._add_sheet(sheet_roster, index=0)
 
+    # name of saved file
+    roster_file_name = f"DR{ dr_config.dr_id } Staffing Report { report_date_stamp }.xlsx"
+    roster_sps_file_name = f"DR{ dr_config.dr_id } SPS Report { report_date_stamp }.xlsx"
+
+    # now figure out who we should send to
+    config_tables = open_report_automation(dr_config, o365.account)
+    mailing_list = run_gap_patterns(dr_config, config_tables, book_out, 'Roster')
+
+    update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date_stamp)
+
     if errors:
         sys.exit(1)
 
-    roster_file_name = f"DR{ dr_config.dr_id } Staffing Report { report_date_stamp }.xlsx"
 
-    book_out.save(roster_file_name)
+    if args.send or args.test_send or args.save:
+        log.debug(f"saving to { roster_file_name }")
+        book_out.save(roster_file_name)
 
     if args.send or args.test_send:
         send_roster(dr_config, args, o365.account, roster_file_name, report_date)
 
-    if not args.save:
+    if not args.save and (args.send or args.test_send):
+        log.debug(f"removing { roster_file_name }")
         os.remove(roster_file_name)
 
 
+#
+# temporary code to test finding a drive id by name
+#
+#
+def open_report_automation(dr_config, account):
+
+    # open the DR folder
+    dr_site = account.sharepoint().get_site(dr_config.sharepoint_site, dr_config.dr_path)
+
+    if dr_site is None:
+        msg = f"Could not find sharepoint site '{ dr_config.sharepoint_site }' path '{ dr_config.dr_path }'"
+        log.error(msg)
+        raise Exception(msg)
+
+    log.debug(f"site { dr_site } name '{ dr_site.display_name }'")
+
+    dr_drive = dr_site.get_default_document_library()
+    dr_folder = get_or_create_report_folder(dr_config, dr_drive)
+
+    # open the template folder
+    template_site = account.sharepoint().get_site(dr_config.sharepoint_site, dr_config.template_path)
+    if template_site is None:
+        msg = f"Could not find template site '{ dr_config.sharepoint_site }' path '{ dr_config.template_path }'"
+        log.error(msg)
+        raise Exception(msg)
+    template_drive = template_site.get_default_document_library()
+    template_folder = template_drive.get_item_by_path(dr_config.template_folder)
+
+    # open the two files we care about, creating if necessary
+    get_dr_file(dr_config, dr_config.readme_file, template_folder, dr_folder)
+    report_config = get_dr_file(dr_config, dr_config.report_config_file, template_folder, dr_folder)
+    log.debug(f"get_dr_file '{ dr_config.report_config_file }' returned { report_config }")
+
+
+    # turn report_config into a spreadsheet
+    config_stream = io.BytesIO()
+    report_config.download(output=config_stream)
+    config_wb = openpyxl.load_workbook(config_stream)
+
+    config_tables = { 'config_wb': config_wb, 'dr_folder': dr_folder, 'report_config': report_config }
+    # get the by-gap table
+    for table_name in [ dr_config.table_per_gap, dr_config.table_extra_recipients ]:
+        config_tables[table_name] = read_table_to_dict(config_wb, table_name)
+
+    return config_tables
+
+
+
+
+#
+# try to open the report folder.  Create it if it doesn't exist
+#
+
+def get_or_create_report_folder(dr_config, dr_drive):
+    try:
+        # try to open the folder.  If it works: it exists
+        folder = dr_drive.get_item_by_path(dr_config.dr_folder)
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+
+            # the folder wasn't present.  Create it
+            folder_path = pathlib.Path(dr_config.dr_folder)
+            parent_path = folder_path.parent
+            log.info(f"need to create per-dr folder '{ dr_config.dr_folder }' in parent '{ parent_path.as_posix() }'")
+            if parent_path.as_posix() == '/':
+                parent = dr_drive.get_root_folder()
+            else:
+                parent = dr_drive.get_item_by_path(parent_path.as_posix())
+
+            log.debug(f"trying to create folder '{ folder_path.name }'")
+            folder = parent.create_child_folder(folder_path.name)
+        else:
+            raise
+    return folder
+
+
+#
+# get a file from the dr_folder.  If it doesn't exists: create it from the template folder
+# return an Entry for the file
+#
+
+def get_dr_file(dr_config, file_name, template_folder, dr_folder):
+
+    file_path = pathlib.Path(dr_config.dr_folder).joinpath(file_name)
+    template_path = pathlib.Path(dr_config.template_folder).joinpath(file_name)
+
+    try:
+        # try to open the folder.  If it works: it exists
+        item = dr_folder.get_drive().get_item_by_path(file_path.as_posix())
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code != 404:
+            raise
+
+        # copy from the templates folder, which we assume exists
+        template_item = template_folder.get_drive().get_item_by_path(template_path.as_posix())
+        copy_op = template_item.copy(target=dr_folder, name=file_name)
+        for status, percent_complete in coyp_op.check_status(delay=1):
+            log.debug(f"copy_op: status { status } %complete { percent_complete}")
+        item = copy_op.get_item()
+        log.debug(f"copy_op: item { item }")
+
+
+    return item
+
+
+#
+# run through all the sheets, looking for the specified table.
+#
+# return the sheet name and the table range
+#
+
+def find_table_by_name(wb, name):
+    for ws in wb.worksheets:
+        for table_name, table_range in ws.tables.items():
+            if name == table_name:
+                return ws.title, table_range
+    return None, None
+
+
+#
+# read a table into a dict, with the keys being the table headers
+#
+
+def read_table_to_dict(wb, table_name):
+
+    # find the table
+    sheet_name, table_range = find_table_by_name(wb, table_name)
+    log.debug(f"table { table_name } sheet { sheet_name } range { table_range }")
+
+    # get the range in terms of min/max
+    # tuple is min_col, min_row, max_col, max_row
+    tuple_range = openpyxl.utils.cell.range_boundaries(table_range)
+    log.debug(f"table range_boundaries { tuple_range }")
+
+    ws = wb[sheet_name]
+
+    row_list = []
+    for row in ws.iter_rows(
+            min_col=tuple_range[0], min_row=tuple_range[1],
+            max_col=tuple_range[2], max_row=tuple_range[3], values_only=True):
+        
+        if not all_none(row):
+            row_list.append(row)
+
+    #log.debug(f"row_list: { row_list }")
+
+    table_dict = spreadsheet_tools.matrix_to_object_array(row_list)
+    #log.debug(f"table_dict: { table_dict }")
+
+    return table_dict
+
+#
+# returns True if all elements in a list are None
+#
+
+def all_none(row):
+    return all(x is None for x in row)
+
+
+#
+# go through the config spreadsheet and figure out who this report should be sent to
+#
+
+def run_gap_patterns(dr_config, config_tables, wb, roster_table_name):
+
+    roster_table_dicts = read_table_to_dict(wb, roster_table_name)
+    config_wb = config_tables['config_wb']
+    per_gap_dicts = config_tables[dr_config.table_per_gap]
+    extra_recipients = config_tables[dr_config.table_extra_recipients]
+
+    # start by including everyone on the Extra Recipients list who is "include"
+    people_to_include = list( filter(lambda x: x is not None,
+            map(lambda x: x['Email'] if x['Type'] == "include" else None,
+            extra_recipients)) )
+
+    log.debug(f"people_to_include part 1: { people_to_include }")
+
+    per_gap_dicts_to_re(per_gap_dicts)
+
+    for person_dict in roster_table_dicts:
+        #log.debug(f"roster_table_dicts: { person_dict }")
+        email = person_dict['Email']
+
+        # if email is in extra_recipients (no matter if include or exclude) then
+        # skip further processing
+        #
+        # if include: they are already there
+        # if exclude: prevent them from being added
+        if any(filter(lambda x: x['Email'] == email, extra_recipients)):
+            log.debug(f"skipping email { email } because it is in extra_recipients")
+            continue
+
+        match_per_gap(person_dict, per_gap_dicts, people_to_include)
+
+    log.debug(f"after gap filtering: including { len(people_to_include) } people")
+    return people_to_include
+
+#
+# see if we should include this email based on the gap of the person
+#
+def match_per_gap(person_dict, gap_dicts, people_to_include):
+
+    email = person_dict['Email']
+    gap = person_dict['GAP(s)']
+
+    for e in gap_dicts:
+        gap_re = e['re']
+
+        if gap_re.fullmatch(gap) is not None:
+            if e['Type'] == 'include':
+                #log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
+                people_to_include.append(person_dict)
+            else:
+                #log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
+                pass
+
+            # include or exclude: we're done with matching
+            return
+
+
+    log.debug(f"no match for { email } gap { gap }") 
+
+
+
+#
+# go through all the per-gap-dict entries and turn the glob expressions into
+# compiled regular expressions
+#
+
+def per_gap_dicts_to_re(gap_dicts):
+
+    for e in gap_dicts:
+        #log.debug(f"per_gap_dicts_to_re: e { e }")
+        gap = e['GAP']
+
+        # we have something that looks like 'om-*' or 'mc-sh-mn'
+        # steps to do:
+        #    upper case everything
+        #    turn - to /
+        #    turn * to .*
+        #    anchor at end to match whole string
+        orig_gap = gap
+        gap = gap.upper()
+        gap = re.sub(r'\*', '.*', gap)
+        gap = re.sub(r'-', '/', gap)
+
+        log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
+
+        e['re'] = re.compile(gap, re.DOTALL)
+
+
+#
+# save results to the config workbook
+#
+def update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date):
+
+    # get o365 DriveItem for the config workbook
+    report_config = config_tables['report_config']
+
+
+    # get the config workbook
+    o365_wb = O365.excel.WorkBook(report_config, use_session=False)
+
+    # start with the report status worksheet
+    ws_status = o365_wb.get_worksheet(dr_config.sheet_report_status)
+    log.debug(f"ws_status { ws_status }")
+
+    # insert a blank row so newest is on top
+    old_status_range = ws_status.get_range("A2:E2")
+    new_status_range = old_status_range.insert_range("down")
+    
+    # and add the data
+    new_status_range.values = [[ NOW.strftime(REPORT_DATE_FORMAT), report_date,
+                                "Success", roster_file_name, roster_sps_file_name ]]
+    new_status_range.update()
+
+    # now do the Current Recipients worksheet
+    ws_recip = o365_wb.get_worksheet(dr_config.sheet_current_recipients)
+    log.debug(f"ws_recip { ws_recip }")
+
+    recips_used_range = ws_recip.get_used_range()
+    recips_used_range.clear()
+
+    # build the array to update result
+    values = [ [ "Name", "Email", "Gap" ] ]      # title row
+
+    # mailing list entries are either a str (email) or a dict with roster row data
+    for entry in mailing_list:
+        if type(entry) == str:
+            values.append( [ None, entry, None ] )
+        else:
+            values.append( [ entry['Name'], entry['Email'], entry['GAP(s)'] ] )
+
+    update_range = f"A1:C{len(values)}"
+    log.debug(f"current_recipients update range is '{ update_range }'")
+    recip_update_range = ws_recip.get_range(update_range)
+    recip_update_range.values = values
+    recip_update_range.update()
+
+
+
+
+
+#
+# not working since you can't write to a file that is open somewhere
+#
+def update_config_wb_notworking(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date):
+
+    config_wb = config_tables['config_wb']
+
+    # step one: add a row to the "Report Status" sheet
+
+    # make a new row
+    ws = config_wb[dr_config.sheet_report_status]
+    ws.insert_rows(2)
+
+    # set the data
+    ws.cell(row=2, column=1).value = report_date
+    ws.cell(row=2, column=2).value = "Success"
+    ws.cell(row=2, column=3).value = roster_file_name
+    ws.cell(row=2, column=4).value = roster_sps_file_name
+
+    # step two: record the recipients in the current recipients sheet
+    ws = config_wb[dr_config.sheet_current_recipients]
+
+    # delete extra rows
+    max_row = ws.max_row
+    ws.delete_rows(2, ws.max_row -1)
+
+    # add emails, and other data if on roster
+    row = 2
+    for entry in mailing_list:
+        if type(entry) == str:
+            email = entry
+            name = None
+            gap = None
+        else:
+            email = entry['Email']
+            name = entry['Name']
+            gap = entry['GAP(s)']
+
+        ws.cell(row=row, column=1).value = name
+        ws.cell(row=row, column=2).value = email
+        ws.cell(row=row, column=3).value = gap
+        row += 1
+
+    # step three: write the file back to the dr_folder in sharepoint
+    dr_folder_path = pathlib.Path(dr_config.dr_folder)
+    dr_config_file_path = dr_folder_path / dr_config.report_config_file
+    dr_folder = config_tables['dr_folder']
+    stream = io.BytesIO()
+    config_wb.save(stream)
+    content = stream.getvalue()
+    content_len = len(content)
+    stream = io.BytesIO(content)
+
+    # actually do the upload
+    retval = dr_folder.upload_file(dr_config_file_path, stream=stream, stream_size=content_len)
+    log.debug(f"update_config_wb: retval { retval }")
+
+
+
+#
+# simple function that returns True if all elements of a list are None
+#
 
 RIGHT_ALIGNED = openpyxl.styles.Alignment(horizontal="right")
 ROSTER_FIXUPS = {

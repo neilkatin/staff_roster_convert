@@ -1,3 +1,4 @@
 .env
 t
 o365_token.txt
+*.swp

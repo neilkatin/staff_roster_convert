@@ -38,6 +38,7 @@ REPORT_DATE_FORMAT = "%Y-%m-%d %H-%M-%S %Z"
 
 
 NOW = datetime.datetime.now().astimezone()
+NOW_NO_TZ = datetime.datetime.now()
 
 
 def main() -> None:
@@ -95,6 +96,7 @@ def main() -> None:
 
     # and copy it to a new sheet to fix up all the column header widths
     sheet_roster = copy_sheet(book_out, sheet_roster1, 0, "Roster", {}, ROSTER_FIXUPS)
+    del book_out['Roster1']
 
 
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
@@ -102,19 +104,31 @@ def main() -> None:
     read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C", suppress_columns={'V':True})
     read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
-    # now copy and filter the 'orig' sheet to the others
-    copy_sheet(book_out, sheet_roster, 0, "Need_SMS", filter_row_sms, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "Needs_Sup", filter_row_needs_sup, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "Days_2", filter_row_2_days, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "Overstayed", filter_row_overstayed, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "OM", filter_row_om, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "WF", filter_row_wf, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "IP", filter_row_ip, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "ER", filter_row_er, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "LOG", filter_row_log, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "CC", filter_row_cc, ROSTER_FIXUPS)
-    copy_sheet(book_out, sheet_roster, 0, "MC", filter_row_mc, ROSTER_FIXUPS)
+    sps_sheets = {
+        "Late Checkin": filter_row_checkin,
+        "Need_SMS": filter_row_sms,
+        "Needs_Sup": filter_row_needs_sup,
+        "Days_2": filter_row_2_days,
+        "Outprocess": filter_row_overstayed,
+    }
 
+    all_sheets = {
+        "OM": filter_row_om,
+        "WF": filter_row_wf,
+        "IP": filter_row_ip,
+        "ER": filter_row_er,
+        "LOG": filter_row_log,
+        "CC": filter_row_cc,
+        "MC": filter_row_mc,
+        }
+
+    # make all the SPS sheets
+    for sheet_name, filter in sps_sheets.items():
+        copy_sheet(book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+    for sheet_name, filter in all_sheets.items():
+        copy_sheet(book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+
+    # remove the default sheet in a new wb that we don't need
     del book_out['Sheet']
 
     # move reoster to beginning of workbook
@@ -135,10 +149,10 @@ def main() -> None:
     if errors:
         sys.exit(1)
 
-
     if args.send or args.test_send or args.save:
         log.debug(f"saving to { roster_file_name }")
         book_out.save(roster_file_name)
+        save_report_file(dr_config, config_tables, book_out, dr_config.reports_folder + "/" + roster_file_name)
 
     if args.send or args.test_send:
         send_roster(dr_config, args, o365.account, roster_file_name, report_date)
@@ -165,7 +179,8 @@ def open_report_automation(dr_config, account):
     log.debug(f"site { dr_site } name '{ dr_site.display_name }'")
 
     dr_drive = dr_site.get_default_document_library()
-    dr_folder = get_or_create_report_folder(dr_config, dr_drive)
+    dr_folder = get_or_create_report_folder(dr_config, dr_drive, dr_config.dr_folder)
+    #reports_folder = get_or_create_report_folder(dr_config, dr_drive, dr_config.reports_folder)
 
     # open the template folder
     template_site = account.sharepoint().get_site(dr_config.sharepoint_site, dr_config.template_path)
@@ -187,7 +202,10 @@ def open_report_automation(dr_config, account):
     report_config.download(output=config_stream)
     config_wb = openpyxl.load_workbook(config_stream)
 
-    config_tables = { 'config_wb': config_wb, 'dr_folder': dr_folder, 'report_config': report_config }
+    config_tables = { 'config_wb': config_wb,
+                     'dr_folder': dr_folder,
+                     'reports_folder_name': dr_config.reports_folder,
+                     'report_config': report_config }
     # get the by-gap table
     for table_name in [ dr_config.table_per_gap, dr_config.table_extra_recipients ]:
         config_tables[table_name] = read_table_to_dict(config_wb, table_name)
@@ -201,17 +219,17 @@ def open_report_automation(dr_config, account):
 # try to open the report folder.  Create it if it doesn't exist
 #
 
-def get_or_create_report_folder(dr_config, dr_drive):
+def get_or_create_report_folder(dr_config, dr_drive, folder_name):
     try:
         # try to open the folder.  If it works: it exists
-        folder = dr_drive.get_item_by_path(dr_config.dr_folder)
+        folder = dr_drive.get_item_by_path(folder_name)
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
 
             # the folder wasn't present.  Create it
-            folder_path = pathlib.Path(dr_config.dr_folder)
+            folder_path = pathlib.Path(folder_name)
             parent_path = folder_path.parent
-            log.info(f"need to create per-dr folder '{ dr_config.dr_folder }' in parent '{ parent_path.as_posix() }'")
+            log.info(f"need to create per-dr folder '{ folder_name }' in parent '{ parent_path.as_posix() }'")
             if parent_path.as_posix() == '/':
                 parent = dr_drive.get_root_folder()
             else:
@@ -454,65 +472,42 @@ def update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, r
 #
 # not working since you can't write to a file that is open somewhere
 #
-def update_config_wb_notworking(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date):
+def save_report_file(dr_config, config_tables, wb, file_path):
 
-    config_wb = config_tables['config_wb']
-
-    # step one: add a row to the "Report Status" sheet
-
-    # make a new row
-    ws = config_wb[dr_config.sheet_report_status]
-    ws.insert_rows(2)
-
-    # set the data
-    ws.cell(row=2, column=1).value = report_date
-    ws.cell(row=2, column=2).value = "Success"
-    ws.cell(row=2, column=3).value = roster_file_name
-    ws.cell(row=2, column=4).value = roster_sps_file_name
-
-    # step two: record the recipients in the current recipients sheet
-    ws = config_wb[dr_config.sheet_current_recipients]
-
-    # delete extra rows
-    max_row = ws.max_row
-    ws.delete_rows(2, ws.max_row -1)
-
-    # add emails, and other data if on roster
-    row = 2
-    for entry in mailing_list:
-        if type(entry) == str:
-            email = entry
-            name = None
-            gap = None
-        else:
-            email = entry['Email']
-            name = entry['Name']
-            gap = entry['GAP(s)']
-
-        ws.cell(row=row, column=1).value = name
-        ws.cell(row=row, column=2).value = email
-        ws.cell(row=row, column=3).value = gap
-        row += 1
+    dr_folder = config_tables['dr_folder']
 
     # step three: write the file back to the dr_folder in sharepoint
-    dr_folder_path = pathlib.Path(dr_config.dr_folder)
-    dr_config_file_path = dr_folder_path / dr_config.report_config_file
-    dr_folder = config_tables['dr_folder']
     stream = io.BytesIO()
-    config_wb.save(stream)
+    wb.save(stream)
     content = stream.getvalue()
     content_len = len(content)
     stream = io.BytesIO(content)
 
     # actually do the upload
-    retval = dr_folder.upload_file(dr_config_file_path, stream=stream, stream_size=content_len)
-    log.debug(f"update_config_wb: retval { retval }")
+    retval = dr_folder.upload_file(dr_folder, item_name=file_path, stream=stream, stream_size=content_len)
+    log.debug(f"save_report_file: file { file_path } retval { retval }")
 
 
 
 #
 # simple function that returns True if all elements of a list are None
 #
+
+def dt_convert(c):
+
+    # definitely not a date
+    if c == '' or c is None:
+        return ''
+
+    # already converted
+    if isinstance(c, datetime.datetime):
+        return c
+
+    #new = spreadsheet_tools.excel_to_dt(c)
+    new = xlrd.xldate_as_datetime(c, 0)
+
+    log.debug(f"dt_convert: orig '{ c }' new '{ new.strftime(REPORT_DATE_FORMAT) }'")
+    return new
 
 RIGHT_ALIGNED = openpyxl.styles.Alignment(horizontal="right")
 ROSTER_FIXUPS = {
@@ -538,25 +533,15 @@ ROSTER_FIXUPS = {
         'All Supervisors': { 'width': 30, },
         'Work Location': { 'width': 30, },
         'Email': { 'width': 30, },
-
-        'Assigned': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
-                     'number_format': "yyyy-mm-dd",
-                     },
-        'Checked in': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
-                       'number_format': "yyyy-mm-dd",
-                     },
-        'Released': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
-                     'number_format': "yyyy-mm-dd",
-                     },
-        'Travel home': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
-                     'number_format': "yyyy-mm-dd",
-                     },
-        'Last Daily Checkin': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
-                     'number_format': "yyyy-mm-dd",
-                     },
+        'Assigned': { 'convert_value': dt_convert, 'number_format': "yyyy-mm-dd", },
+        'Checked in': { 'convert_value': dt_convert, 'number_format': "yyyy-mm-dd", },
+        'Released': { 'convert_value': dt_convert, 'number_format': "yyyy-mm-dd", },
+        'Travel home': { 'convert_value': dt_convert, 'number_format': "yyyy-mm-dd", },
+        'Last Daily Checkin': { 'convert_value': dt_convert, 'number_format': "yyyy-mm-dd", },
         'DaysRemain': { 'width': 5, 'number_format': "##0",
                        'alignment': RIGHT_ALIGNED,
-                       'convert_value': lambda x: x if isinstance(x, int) else x if  x == '' or x == 'n/a' else int(x),
+                       #'convert_value': lambda x: x if x is not None and isinstance(x, int)) else x if  x == '' or x == 'n/a' else int(x),
+                       'convert_value': lambda x: None if x is None else x if isinstance(x, int) else x if  x == '' or x == 'n/a' else int(x),
                        },
         'On Job': { 'width': 4, 'convert_value': lambda x: int(x) if isinstance(x, str) else x },
     }
@@ -575,10 +560,10 @@ ARRIVAL_FIXUPS = {
         'GAP': { 'width': 15, },
         '# Deploy': { 'width': 15, },
         'Texts?': { 'width': 8, },
-        'Arrive date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Arrive date': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd",
                      },
-        'Flight Arrival Date/Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Flight Arrival Date/Time': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
@@ -596,18 +581,18 @@ AIR_FIXUPS = {
         'Reporting or Work location': { 'width': 24 },
         'District': { 'width': 10 },
 
-        'Last action date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Last action date': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
-        'Exp Arrival': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Exp Arrival': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd",
                      },
-        'Departure time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Departure time': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
-        'Arrival time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Arrival time': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
@@ -627,22 +612,22 @@ SHIFTS_FIXUPS = {
         'Ever DEBV/P-DEBV for this DRO': { 'width': 16 },
         'Email': { 'width': 24 },
 
-        'Start Date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Start Date': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd",
                      },
-        'Start Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Start Time': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
-        'End Date': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'End Date': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
-        'Date Registered/Last Changed': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'Date Registered/Last Changed': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
-        'End Time': { 'convert_value': lambda c: '' if c == '' else spreadsheet_tools.excel_to_dt(c),
+        'End Time': { 'convert_value': dt_convert,
                      'number_format': "yyyy-mm-dd hh:mm",
                      'width': 18,
                      },
@@ -706,9 +691,27 @@ def fixup_cell(cell, fixup):
         #log.debug(f"setting cell { cell } alignment { fixup['alignment'] }")
         cell.alignment = fixup['alignment']
 
+# see if the responder is missing daily checkins.
+# the rule: last checkin over 3 days, or if never checked in: DRO checkin date over 3 days
+def filter_row_checkin_func(val, row, row_name_map):
+
+    checkin_warn_threshold = 3
+    dt_threshold = NOW_NO_TZ - datetime.timedelta(days=checkin_warn_threshold)
+    if isinstance(val, datetime.datetime):
+        if val < dt_threshold:
+            return True
+    else:
+        c = row_name_map['Checked in']
+        val = row[c]
+        if isinstance(val, datetime.datetime):
+            if val < dt_threshold:
+                return True
+
+    return False
+
 
 filter_row_active = { 'Released': lambda x: x == '' }
-filter_row_overstayed = { 'DaysRemain': lambda x: x != '' and x != 'n/a' and x is not None and int(x) < 0 }
+filter_row_overstayed = { 'DaysRemain': lambda x: x != '' and x != 'n/a' and x is not None and int(x) <= 0 }
 filter_row_2_days = { 'DaysRemain': lambda x: x != '' and x != 'n/a' and x is not None and int(x) == 2 }
 filter_row_needs_sup = { 'Current/Last Supervisor': lambda x: x != '' and x is not None and x == 'Needs Supervisor' }
 filter_row_sms = { 'Texts?': lambda x: x != 'opt-in' }
@@ -720,10 +723,17 @@ filter_row_ip = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('IP/')
 filter_row_wf = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('WF/') }
 filter_row_om = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('OM/') }
 
+filter_row_checkin = { 'Last Daily Checkin': filter_row_checkin_func, 'extra_args': True }
+
+
 def filter_row(row, row_name_map, filter_defs):
     # check all the conditions in the filter; if they all pass include the row
 
     for name, func in filter_defs.items():
+        if name == 'extra_args':
+            # pseudo argument, not a column name.  Ignore
+            continue
+
         #log.debug(f"filter_row: name '{ name }'")
 
         # ignore filtered columns
@@ -731,9 +741,15 @@ def filter_row(row, row_name_map, filter_defs):
             c = row_name_map[name]
             val = row[c]
             #log.debug(f"filter_row: name { name } c { c } val '{ val }' ")
-            if not func(val):
-                #log.debug(f"filter_row: name { name } val '{ val }' returning False")
-                return False
+            if 'extra_args' in filter_defs:
+                pass
+                if not func(val, row, row_name_map):
+                    log.debug(f"filter_row: name { name } val '{ val }' returning False")
+                    return False
+            else:
+                if not func(val):
+                    #log.debug(f"filter_row: name { name } val '{ val }' returning False")
+                    return False
         
     #log.debug(f"filter_row: returning True")
     return True

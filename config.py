@@ -9,6 +9,7 @@ SHAREPOINT_SITE = 'americanredcross.sharepoint.com'
 TEMPLATE_PATH = '/teams/dr-staffing-reports'
 TEMPLATE_FOLDER = '/templates'
 DR_FOLDER = '/Report Automation'
+REPORTS_FOLDER = "Reports"
 
 README_FILE = '000_README_ME_FIRST.md'
 REPORT_CONFIG_FILE = 'Report Config.xlsx'
@@ -36,6 +37,8 @@ class DRConfig:
         self._sharepoint_site = SHAREPOINT_SITE
         self._template_path = TEMPLATE_PATH
         self._template_folder = TEMPLATE_FOLDER
+        self._reports_folder = REPORTS_FOLDER
+
         self._readme_file = README_FILE
         self._report_config_file = REPORT_CONFIG_FILE
 
@@ -72,6 +75,10 @@ class DRConfig:
     @property
     def dr_folder(self):
         return self._dr_folder
+
+    @property
+    def reports_folder(self):
+        return self._reports_folder
 
     @property
     def sharepoint_site(self):

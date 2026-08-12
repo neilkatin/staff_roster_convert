@@ -125,7 +125,7 @@ def main() -> None:
 
     # make all the SPS sheets
     for sheet_name, filter in sps_sheets.items():
-        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS, sheet_color='99ff99')
     for sheet_name, filter in all_sheets.items():
         copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
 
@@ -828,11 +828,15 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
 # copy from the 'orig' sheet to a new sheet, filtering entries
-def copy_sheet(dr_config, wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_columns: dict[str] = {}):
+def copy_sheet(dr_config, wb, sheet_orig, label_row, sheet_name, filters, fixups,
+               sheet_color: str = None,
+               suppress_columns: dict[str] = {}):
     
     #log.debug(f"copy_sheet: sheet_name { sheet_name } label_row { label_row }")
     #sheet_new = wb.create_sheet(sheet_name, len(wb.sheetnames)-1)
     sheet_new = wb.create_sheet(sheet_name, 0)
+    if sheet_color is not None:
+        sheet_new.sheet_properties.tabColor = sheet_color
 
     label_values = list(next(sheet_orig.iter_rows(min_row=label_row +1, max_row=label_row +2, values_only=True)))
 

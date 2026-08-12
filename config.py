@@ -24,10 +24,14 @@ SHEET_REPORT_STATUS = 'Report Status'
 TABLE_PER_GAP = 'PerGap'
 TABLE_EXTRA_RECIPIENTS = 'ExtraRecipients'
 
+# default value for daily checkin nags
+LATE_CHECKIN_THRESHOLD = 3
+
+
 _DR_CONFIGURATIONS = {}
 
 class DRConfig:
-    def __init__(self, dr_id, to_email, dr_path, dr_folder=DR_FOLDER, from_email=None):
+    def __init__(self, dr_id, to_email, dr_path, subject_match_string=None, dr_folder=DR_FOLDER, from_email=None):
         self._dr_id = dr_id
         self._from_email = from_email
         self._to_email = to_email
@@ -49,6 +53,10 @@ class DRConfig:
 
         self._table_per_gap = TABLE_PER_GAP
         self._table_extra_recipients = TABLE_EXTRA_RECIPIENTS
+
+        self._subject_match_string = subject_match_string
+
+        self._late_checkin_threshold = LATE_CHECKIN_THRESHOLD
 
         _DR_CONFIGURATIONS[self.dr_id] = self
 
@@ -124,6 +132,14 @@ class DRConfig:
     def table_extra_recipients(self):
         return self._table_extra_recipients
 
+    @property
+    def subject_match_string(self):
+        return self._subject_match_string
+
+    @property
+    def late_checkin_threshold(self):
+        return self._late_checkin_threshold
+
     @staticmethod
     def lookup_dr(dr_id):
         if dr_id not in _DR_CONFIGURATIONS:
@@ -132,5 +148,5 @@ class DRConfig:
 
 
 # now create the DROs
-DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce')
+DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce', subject_match_string='DR458-2026Automated Workforce Reports')
 

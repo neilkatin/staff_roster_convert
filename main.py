@@ -13,6 +13,7 @@ import base64
 import pathlib
 import requests
 import requests.exceptions
+import textwrap
 
 import xlrd
 import dotenv
@@ -58,7 +59,7 @@ def main() -> None:
 
     o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
 
-    report_dict = o365.fetch_workforce_reports(dr_config.dr_id)
+    report_dict = o365.fetch_workforce_reports(dr_config.dr_id, subject_match_string=dr_config.subject_match_string)
     report_date = report_dict['created']
     report_date_stamp = report_date.strftime(REPORT_DATE_FORMAT)
     log.debug(f"report date is '{ report_date }', stamp '{ report_date_stamp }'")
@@ -68,7 +69,7 @@ def main() -> None:
 
     # do the 'orig' roster first so it is at the end of the list
     sheet_orig = read_roster(book_out, ORIG_SHEET_NAME, report_dict['Staff Roster - Cumulative'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
-    sheet_roster1 = copy_sheet(book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster1", filter_row_active, ROSTER_FIXUPS)
+    sheet_roster1 = copy_sheet(dr_config, book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster1", filter_row_active, ROSTER_FIXUPS)
 
     # delete column 'I': the Released column
     # first delete the column
@@ -95,7 +96,7 @@ def main() -> None:
     sheet_roster1.add_table(table)
 
     # and copy it to a new sheet to fix up all the column header widths
-    sheet_roster = copy_sheet(book_out, sheet_roster1, 0, "Roster", {}, ROSTER_FIXUPS)
+    sheet_roster = copy_sheet(dr_config, book_out, sheet_roster1, 0, "Roster", {}, ROSTER_FIXUPS)
     del book_out['Roster1']
 
 
@@ -105,7 +106,7 @@ def main() -> None:
     read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
     sps_sheets = {
-        "Late Checkin": filter_row_checkin,
+        "Late_Checkin": filter_row_checkin,
         "Need_SMS": filter_row_sms,
         "Needs_Sup": filter_row_needs_sup,
         "Days_2": filter_row_2_days,
@@ -124,9 +125,9 @@ def main() -> None:
 
     # make all the SPS sheets
     for sheet_name, filter in sps_sheets.items():
-        copy_sheet(book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
     for sheet_name, filter in all_sheets.items():
-        copy_sheet(book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
 
     # remove the default sheet in a new wb that we don't need
     del book_out['Sheet']
@@ -155,7 +156,7 @@ def main() -> None:
         save_report_file(dr_config, config_tables, book_out, dr_config.reports_folder + "/" + roster_file_name)
 
     if args.send or args.test_send:
-        send_roster(dr_config, args, o365.account, roster_file_name, report_date)
+        send_roster(dr_config, args, o365.account, roster_file_name, "SPS Report", report_date)
 
     if not args.save and (args.send or args.test_send):
         log.debug(f"removing { roster_file_name }")
@@ -293,12 +294,12 @@ def read_table_to_dict(wb, table_name):
 
     # find the table
     sheet_name, table_range = find_table_by_name(wb, table_name)
-    log.debug(f"table { table_name } sheet { sheet_name } range { table_range }")
+    #log.debug(f"table { table_name } sheet { sheet_name } range { table_range }")
 
     # get the range in terms of min/max
     # tuple is min_col, min_row, max_col, max_row
     tuple_range = openpyxl.utils.cell.range_boundaries(table_range)
-    log.debug(f"table range_boundaries { tuple_range }")
+    #log.debug(f"table range_boundaries { tuple_range }")
 
     ws = wb[sheet_name]
 
@@ -412,7 +413,7 @@ def per_gap_dicts_to_re(gap_dicts):
         gap = re.sub(r'\*', '.*', gap)
         gap = re.sub(r'-', '/', gap)
 
-        log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
+        #log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
 
         e['re'] = re.compile(gap, re.DOTALL)
 
@@ -506,8 +507,9 @@ def dt_convert(c):
     #new = spreadsheet_tools.excel_to_dt(c)
     new = xlrd.xldate_as_datetime(c, 0)
 
-    log.debug(f"dt_convert: orig '{ c }' new '{ new.strftime(REPORT_DATE_FORMAT) }'")
+    #log.debug(f"dt_convert: orig '{ c }' new '{ new.strftime(REPORT_DATE_FORMAT) }'")
     return new
+
 
 RIGHT_ALIGNED = openpyxl.styles.Alignment(horizontal="right")
 ROSTER_FIXUPS = {
@@ -693,9 +695,9 @@ def fixup_cell(cell, fixup):
 
 # see if the responder is missing daily checkins.
 # the rule: last checkin over 3 days, or if never checked in: DRO checkin date over 3 days
-def filter_row_checkin_func(val, row, row_name_map):
+def filter_row_checkin_func(val, row, row_name_map, dr_config):
 
-    checkin_warn_threshold = 3
+    checkin_warn_threshold = dr_config.late_checkin_threshold
     dt_threshold = NOW_NO_TZ - datetime.timedelta(days=checkin_warn_threshold)
     if isinstance(val, datetime.datetime):
         if val < dt_threshold:
@@ -726,7 +728,7 @@ filter_row_om = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('OM/')
 filter_row_checkin = { 'Last Daily Checkin': filter_row_checkin_func, 'extra_args': True }
 
 
-def filter_row(row, row_name_map, filter_defs):
+def filter_row(row, row_name_map, filter_defs, dr_config):
     # check all the conditions in the filter; if they all pass include the row
 
     for name, func in filter_defs.items():
@@ -743,8 +745,8 @@ def filter_row(row, row_name_map, filter_defs):
             #log.debug(f"filter_row: name { name } c { c } val '{ val }' ")
             if 'extra_args' in filter_defs:
                 pass
-                if not func(val, row, row_name_map):
-                    log.debug(f"filter_row: name { name } val '{ val }' returning False")
+                if not func(val, row, row_name_map, dr_config):
+                    #log.debug(f"filter_row: name { name } val '{ val }' returning False")
                     return False
             else:
                 if not func(val):
@@ -760,7 +762,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
+    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
@@ -826,7 +828,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
 # copy from the 'orig' sheet to a new sheet, filtering entries
-def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_columns: dict[str] = {}):
+def copy_sheet(dr_config, wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_columns: dict[str] = {}):
     
     #log.debug(f"copy_sheet: sheet_name { sheet_name } label_row { label_row }")
     #sheet_new = wb.create_sheet(sheet_name, len(wb.sheetnames)-1)
@@ -860,7 +862,7 @@ def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_
 
         include_row = False
         if r > label_row:
-            include_row = filter_row(row_values, column_name_map, filters)
+            include_row = filter_row(row_values, column_name_map, filters, dr_config)
         else:
             include_row = True
 
@@ -903,25 +905,109 @@ def copy_sheet(wb, sheet_orig, label_row, sheet_name, filters, fixups, suppress_
 #
 # wrapper for sending out the roster
 #
-def send_roster(dr_config, args, account, file_name, report_date):
+def send_roster(dr_config, args, account, file_name, report_type, report_date):
 
     warn_days = 2
     if report_date < NOW - datetime.timedelta(days=warn_days):
-        date_warning = f"<span style='background-color:yellow;'>WARNING: staff report is more than { warn_days } days old<span>."
+        date_warning = textwrap.dedent(
+                f"""
+                <p>
+                <span style='background-color:yellow;'>WARNING: staff report is more than { warn_days } days old<span>.
+                </p>
+                """)
     else:
         date_warning = ""
 
-    message_body = \
-f"""
-<p>
-This report is based on the staff roster dated { report_date.strftime(REPORT_DATE_FORMAT) }.
-</p>
-{ date_warning }
+    if report_type == "SPS Report":
+        pass
+        sps_section = textwrap.dedent(
+                f"""
+                <p>
+                This is the SPS version of this report
+                which several additional worksheets to slightly ease the SPS workflow.
+                </p>
 
-Hello everyone.  This is a spreadsheet based on the automated staffing reports, but reorganized to hopefully be easier to use.
-"""
+                <div style="padding-left:20px;">
 
-    send_report_common(dr_config, args, account, file_name, "Staffing Report", message_body)
+                    <p>
+                    The Outprocess worksheet has people with zero days (or negative days) of remaining time on the DR.
+                    They should be contacted to outprocess or extend their deployment
+                    </p>
+
+                    <p>
+                    The Days_2 worksheet has people with 2 days left on their deployment.
+                    It is common to reach out to these folks with a template with outprocessing instructions
+                    </p>
+
+                    <p>
+                    The Needs_Sup sheet shows people with their supervisor set to Needs Supervisor
+                    </p>
+
+                    <p>
+                    The Need_SMS sheet shows people who have not opted in to DCS Text Messaging;
+                    they should be contacted to opt in so they can receive DRIS and other text messages.
+                    </p>
+
+                    <p>
+                    Late_checkin show people who haven't done a daily checkin in more than
+                    { dr_config.late_checkin_threshold } days
+                    </p>
+                </div>
+
+                """)
+    else:
+        sps_section = ""
+
+    message_body = textwrap.dedent(
+        f"""
+        <p>
+        This report is based on the staff roster dated { report_date.strftime(REPORT_DATE_FORMAT) }.
+        </p>
+
+        { date_warning }
+
+        <p>
+        Hello everyone.  This is a spreadsheet based on the automated staffing reports, but reorganized to hopefully be easier to use.
+        </p>
+
+
+        <p>
+        It has the same data as the normal automated report, but has been reformatted for easier use.
+        All the sheets have been made with tables, so the columns are sortable and filterable.
+        The sheets have been 'frozen', so column headers and names are always visible,
+        even when scrolling in the worksheet.
+        </p>
+
+        <p>
+        There is a worksheet called "Roster" which has all responders who have not been out-processed appear.
+        By default this is sorted by GAP, but you can easily re-sort it using the column headers
+        </p>
+
+        <p>
+        In addition there is a worksheet for every Group, with the responders in that group in that worksheet.
+        </p>
+
+        <p>
+        Finally there is a sheet for all the other automated reports,
+        as well as the original version of the staff roster (called "Orig") that has outprocessed people also.
+        </p>
+
+        { sps_section }
+
+        <p>
+        DR { dr_config.dr_id } Staff Planning and Support
+        </p>
+
+        <p>
+        If you have any questions or suggestions about the report or its contents, feel free to contact
+        <a href='mailto:dr-report-automation@redcross.org'>dr-report-automation@redcross.org</a>.
+        </p>
+
+        """)
+
+    send_report_common(dr_config, args, account, file_name, report_type, message_body)
+
+
 
 
 def send_report_common(dr_config, args, account, file_name, report_type, message_body):

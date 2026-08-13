@@ -7,9 +7,9 @@ EMAIL_TO_TEST = 'generic@askneil.com'
 
 SHAREPOINT_SITE = 'americanredcross.sharepoint.com'
 TEMPLATE_PATH = '/teams/dr-staffing-reports'
-TEMPLATE_FOLDER = '/templates'
-DR_FOLDER = '/Report Automation'
-REPORTS_FOLDER = "Reports"
+TEMPLATE_FOLDER_NAME = '/templates'
+DR_FOLDER_NAME = '/Report Automation'
+REPORTS_FOLDER_NAME = "Reports"
 
 README_FILE = '000_README_ME_FIRST.md'
 REPORT_CONFIG_FILE = 'Report Config.xlsx'
@@ -31,17 +31,18 @@ LATE_CHECKIN_THRESHOLD = 3
 _DR_CONFIGURATIONS = {}
 
 class DRConfig:
-    def __init__(self, dr_id, to_email, dr_path, subject_match_string=None, dr_folder=DR_FOLDER, from_email=None):
+    def __init__(self, dr_id, to_email, dr_path, send_email, subject_match_string=None, dr_folder_name=DR_FOLDER_NAME, from_email=None):
         self._dr_id = dr_id
         self._from_email = from_email
         self._to_email = to_email
         self._to_test = EMAIL_TO_TEST
         self._dr_path = dr_path
-        self._dr_folder = dr_folder
+        self._dr_folder_name = dr_folder_name
         self._sharepoint_site = SHAREPOINT_SITE
         self._template_path = TEMPLATE_PATH
-        self._template_folder = TEMPLATE_FOLDER
-        self._reports_folder = REPORTS_FOLDER
+        self._template_folder_name = TEMPLATE_FOLDER_NAME
+        self._reports_folder_name = REPORTS_FOLDER_NAME
+        self._send_email = send_email
 
         self._readme_file = README_FILE
         self._report_config_file = REPORT_CONFIG_FILE
@@ -81,12 +82,16 @@ class DRConfig:
         return self._dr_path
 
     @property
-    def dr_folder(self):
-        return self._dr_folder
+    def dr_folder_name(self):
+        return self._dr_folder_name
 
     @property
-    def reports_folder(self):
-        return self._reports_folder
+    def reports_folder_name(self):
+        return self._reports_folder_name
+
+    @property
+    def send_email(self):
+        return self._send_email
 
     @property
     def sharepoint_site(self):
@@ -97,8 +102,8 @@ class DRConfig:
         return self._template_path
 
     @property
-    def template_folder(self):
-        return self._template_folder
+    def template_folder_name(self):
+        return self._template_folder_name
 
     @property
     def readme_file(self):
@@ -148,5 +153,5 @@ class DRConfig:
 
 
 # now create the DROs
-DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce', subject_match_string='DR458-2026Automated Workforce Reports')
+DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce', 'dr458-26staffing@redcross.org', subject_match_string='DR458-2026Automated Workforce Reports')
 

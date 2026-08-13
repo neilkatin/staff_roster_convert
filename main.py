@@ -29,6 +29,7 @@ import O365.excel
 import config as config_static
 import neil_tools
 import arc_o365
+import o365_staffing
 from neil_tools import spreadsheet_tools
 
 
@@ -141,135 +142,59 @@ def main() -> None:
     roster_file_name = f"DR{ dr_config.dr_id } Staffing Report { report_date_stamp }.xlsx"
     roster_sps_file_name = f"DR{ dr_config.dr_id } SPS Report { report_date_stamp }.xlsx"
 
-    # now figure out who we should send to
-    config_tables = open_report_automation(dr_config, o365.account)
-    mailing_list = run_gap_patterns(dr_config, config_tables, book_out, 'Roster')
+    o365_config = o365_staffing.O365Config(dr_config, o365.account)
+    config_tables = { 'o365_config': o365_config}
+    # get the by-gap table
+    for table_name in [ dr_config.table_per_gap, dr_config.table_extra_recipients ]:
+        config_tables[table_name] = read_table_to_dict(o365_config.config_wb, table_name)
 
-    update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date_stamp)
+    # now figure out who we should send to
+    mailing_list = run_gap_patterns(dr_config, o365_config, config_tables, book_out, 'Roster')
+    mailing_list_sps = run_gap_patterns_sps(dr_config, config_tables, book_out, 'Roster')
+
+    # write out stuff to the config workbook
+    recip_ws = init_config_wb(o365_config, config_tables, roster_file_name, roster_sps_file_name, report_date_stamp)
+    update_config_wb(recip_ws, mailing_list, "Staffing")
+    update_config_wb(recip_ws, mailing_list_sps, "SPS")
 
     if errors:
         sys.exit(1)
 
+    # send to SPS
+    do_distribution(dr_config, args, o365_config, config_tables, book_out, "SPS Report", roster_sps_file_name,
+                    report_date, mailing_list_sps)
+
+    # send the regular roster out
+    for sheet_name, filter in sps_sheets.items():
+        # delete the sps sheet
+        del book_out[sheet_name]
+
+    do_distribution(dr_config, args, o365_config, config_tables, book_out, "Staffing Report", roster_file_name,
+                    report_date, mailing_list)
+
+
+
+#
+# common code for sending both the SPS reports and the regular reports
+#
+
+def do_distribution(dr_config, args, o365_config, config_tables, book_out, report_name, file_name, report_date, mailing_list):
+
     if args.send or args.test_send or args.save:
-        log.debug(f"saving to { roster_file_name }")
-        book_out.save(roster_file_name)
-        save_report_file(dr_config, config_tables, book_out, dr_config.reports_folder + "/" + roster_file_name)
+        log.debug(f"saving to { file_name }")
+        book_out.save(file_name)
+        save_report_file(dr_config, o365_config, config_tables, book_out, dr_config.reports_folder_name + "/" + file_name)
 
-    if args.send or args.test_send:
-        send_roster(dr_config, args, o365.account, roster_file_name, "SPS Report", report_date)
+    try: 
+        if args.send or args.test_send:
+            send_roster(dr_config, args, o365_config.account, file_name, "SPS Report", report_date, mailing_list)
+    except:
+        raise
 
-    if not args.save and (args.send or args.test_send):
-        log.debug(f"removing { roster_file_name }")
-        os.remove(roster_file_name)
-
-
-#
-# temporary code to test finding a drive id by name
-#
-#
-def open_report_automation(dr_config, account):
-
-    # open the DR folder
-    dr_site = account.sharepoint().get_site(dr_config.sharepoint_site, dr_config.dr_path)
-
-    if dr_site is None:
-        msg = f"Could not find sharepoint site '{ dr_config.sharepoint_site }' path '{ dr_config.dr_path }'"
-        log.error(msg)
-        raise Exception(msg)
-
-    log.debug(f"site { dr_site } name '{ dr_site.display_name }'")
-
-    dr_drive = dr_site.get_default_document_library()
-    dr_folder = get_or_create_report_folder(dr_config, dr_drive, dr_config.dr_folder)
-    #reports_folder = get_or_create_report_folder(dr_config, dr_drive, dr_config.reports_folder)
-
-    # open the template folder
-    template_site = account.sharepoint().get_site(dr_config.sharepoint_site, dr_config.template_path)
-    if template_site is None:
-        msg = f"Could not find template site '{ dr_config.sharepoint_site }' path '{ dr_config.template_path }'"
-        log.error(msg)
-        raise Exception(msg)
-    template_drive = template_site.get_default_document_library()
-    template_folder = template_drive.get_item_by_path(dr_config.template_folder)
-
-    # open the two files we care about, creating if necessary
-    get_dr_file(dr_config, dr_config.readme_file, template_folder, dr_folder)
-    report_config = get_dr_file(dr_config, dr_config.report_config_file, template_folder, dr_folder)
-    log.debug(f"get_dr_file '{ dr_config.report_config_file }' returned { report_config }")
-
-
-    # turn report_config into a spreadsheet
-    config_stream = io.BytesIO()
-    report_config.download(output=config_stream)
-    config_wb = openpyxl.load_workbook(config_stream)
-
-    config_tables = { 'config_wb': config_wb,
-                     'dr_folder': dr_folder,
-                     'reports_folder_name': dr_config.reports_folder,
-                     'report_config': report_config }
-    # get the by-gap table
-    for table_name in [ dr_config.table_per_gap, dr_config.table_extra_recipients ]:
-        config_tables[table_name] = read_table_to_dict(config_wb, table_name)
-
-    return config_tables
-
-
-
-
-#
-# try to open the report folder.  Create it if it doesn't exist
-#
-
-def get_or_create_report_folder(dr_config, dr_drive, folder_name):
-    try:
-        # try to open the folder.  If it works: it exists
-        folder = dr_drive.get_item_by_path(folder_name)
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-
-            # the folder wasn't present.  Create it
-            folder_path = pathlib.Path(folder_name)
-            parent_path = folder_path.parent
-            log.info(f"need to create per-dr folder '{ folder_name }' in parent '{ parent_path.as_posix() }'")
-            if parent_path.as_posix() == '/':
-                parent = dr_drive.get_root_folder()
-            else:
-                parent = dr_drive.get_item_by_path(parent_path.as_posix())
-
-            log.debug(f"trying to create folder '{ folder_path.name }'")
-            folder = parent.create_child_folder(folder_path.name)
-        else:
-            raise
-    return folder
-
-
-#
-# get a file from the dr_folder.  If it doesn't exists: create it from the template folder
-# return an Entry for the file
-#
-
-def get_dr_file(dr_config, file_name, template_folder, dr_folder):
-
-    file_path = pathlib.Path(dr_config.dr_folder).joinpath(file_name)
-    template_path = pathlib.Path(dr_config.template_folder).joinpath(file_name)
-
-    try:
-        # try to open the folder.  If it works: it exists
-        item = dr_folder.get_drive().get_item_by_path(file_path.as_posix())
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code != 404:
-            raise
-
-        # copy from the templates folder, which we assume exists
-        template_item = template_folder.get_drive().get_item_by_path(template_path.as_posix())
-        copy_op = template_item.copy(target=dr_folder, name=file_name)
-        for status, percent_complete in coyp_op.check_status(delay=1):
-            log.debug(f"copy_op: status { status } %complete { percent_complete}")
-        item = copy_op.get_item()
-        log.debug(f"copy_op: item { item }")
-
-
-    return item
+    finally:
+        if not args.save and (args.send or args.test_send):
+            log.debug(f"removing { file_name }")
+            os.remove(file_name)
 
 
 #
@@ -330,10 +255,10 @@ def all_none(row):
 # go through the config spreadsheet and figure out who this report should be sent to
 #
 
-def run_gap_patterns(dr_config, config_tables, wb, roster_table_name):
+def run_gap_patterns(dr_config, o365_config, config_tables, wb, roster_table_name):
 
     roster_table_dicts = read_table_to_dict(wb, roster_table_name)
-    config_wb = config_tables['config_wb']
+    config_wb = o365_config.config_wb
     per_gap_dicts = config_tables[dr_config.table_per_gap]
     extra_recipients = config_tables[dr_config.table_extra_recipients]
 
@@ -342,7 +267,33 @@ def run_gap_patterns(dr_config, config_tables, wb, roster_table_name):
             map(lambda x: x['Email'] if x['Type'] == "include" else None,
             extra_recipients)) )
 
-    log.debug(f"people_to_include part 1: { people_to_include }")
+    log.debug(f"run_gap_patterns: people_to_include { [ x if isinstance(x, str) else x['Name'] for x in people_to_include ] }")
+
+    run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include)
+    return people_to_include
+
+
+#
+# hard coded SPS gap patterns
+#
+
+def run_gap_patterns_sps(dr_config, config_tables, wb, roster_table_name):
+    roster_table_dicts = read_table_to_dict(wb, roster_table_name)
+    per_gap_dicts = [ { 'Type': 'include', 'GAP': 'wf-sps-*' }, { 'Type': 'include', 'GAP': 'om-wf-ad' } ]
+    extra_recipients = []
+    people_to_include = []
+
+    run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include)
+
+    log.debug(f"run_gap_patterns_sps: people_to_include { [ x['Name'] for x in people_to_include ] }")
+    return people_to_include
+
+
+#
+# split off common code to compute SPS recipients
+#
+
+def run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include):
 
     per_gap_dicts_to_re(per_gap_dicts)
 
@@ -362,7 +313,7 @@ def run_gap_patterns(dr_config, config_tables, wb, roster_table_name):
         match_per_gap(person_dict, per_gap_dicts, people_to_include)
 
     log.debug(f"after gap filtering: including { len(people_to_include) } people")
-    return people_to_include
+    people_to_include
 
 #
 # see if we should include this email based on the gap of the person
@@ -370,24 +321,27 @@ def run_gap_patterns(dr_config, config_tables, wb, roster_table_name):
 def match_per_gap(person_dict, gap_dicts, people_to_include):
 
     email = person_dict['Email']
-    gap = person_dict['GAP(s)']
+
+
+    # gap may be a comma separated list of GAPs.  Just take the first one
+    gap = person_dict['GAP(s)'].split(sep=',')[0]
 
     for e in gap_dicts:
         gap_re = e['re']
 
         if gap_re.fullmatch(gap) is not None:
             if e['Type'] == 'include':
-                #log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
+                log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
                 people_to_include.append(person_dict)
             else:
-                #log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
+                log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
                 pass
 
             # include or exclude: we're done with matching
             return
 
 
-    log.debug(f"no match for { email } gap { gap }") 
+    #log.debug(f"no match for { email } gap { gap }") 
 
 
 
@@ -413,7 +367,7 @@ def per_gap_dicts_to_re(gap_dicts):
         gap = re.sub(r'\*', '.*', gap)
         gap = re.sub(r'-', '/', gap)
 
-        #log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
+        log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
 
         e['re'] = re.compile(gap, re.DOTALL)
 
@@ -421,10 +375,11 @@ def per_gap_dicts_to_re(gap_dicts):
 #
 # save results to the config workbook
 #
-def update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, roster_sps_file_name, report_date):
+def init_config_wb(o365_config, config_tables, roster_file_name, roster_sps_file_name, report_date):
 
     # get o365 DriveItem for the config workbook
-    report_config = config_tables['report_config']
+    report_config = o365_config.report_config
+    dr_config = o365_config.dr_config
 
 
     # get the config workbook
@@ -451,31 +406,46 @@ def update_config_wb(dr_config, config_tables, mailing_list, roster_file_name, r
     recips_used_range.clear()
 
     # build the array to update result
-    values = [ [ "Name", "Email", "Gap" ] ]      # title row
+    values = [ [ "Report Type", "Name", "Email", "Gap" ] ]      # title row
 
-    # mailing list entries are either a str (email) or a dict with roster row data
-    for entry in mailing_list:
-        if type(entry) == str:
-            values.append( [ None, entry, None ] )
-        else:
-            values.append( [ entry['Name'], entry['Email'], entry['GAP(s)'] ] )
-
-    update_range = f"A1:C{len(values)}"
+    update_range = f"A1:D{len(values)}"
     log.debug(f"current_recipients update range is '{ update_range }'")
     recip_update_range = ws_recip.get_range(update_range)
     recip_update_range.values = values
     recip_update_range.update()
 
+    return ws_recip
 
 
+def update_config_wb(ws, mailing_list, report_type):
+
+    # mailing list entries are either a str (email) or a dict with roster row data
+    values = []
+    for entry in mailing_list:
+        if type(entry) == str:
+            values.append( [ report_type, None, entry, None ] )
+        else:
+            values.append( [ report_type, entry['Name'], entry['Email'], entry['GAP(s)'] ] )
+
+    recips_used_range = ws.get_used_range()
+    row_start = recips_used_range.row_index + recips_used_range.row_count
+    col_index = recips_used_range.column_index
+    col_count = recips_used_range.column_count
+    log.debug(f"update_config_wb: { report_type } row_start { row_start } col_index { col_index } col_count { col_count }")
+
+    update_range = f"A{ row_start + 1 }:D{ row_start + len(values)}"
+    log.debug(f"current_recipients update range is '{ update_range }', len { len(values) }")
+    recip_update_range = ws.get_range(update_range)
+    recip_update_range.values = values
+    recip_update_range.update()
 
 
 #
 # not working since you can't write to a file that is open somewhere
 #
-def save_report_file(dr_config, config_tables, wb, file_path):
+def save_report_file(dr_config, o365_config, config_tables, wb, file_path):
 
-    dr_folder = config_tables['dr_folder']
+    dr_folder = o365_config.dr_folder
 
     # step three: write the file back to the dr_folder in sharepoint
     stream = io.BytesIO()
@@ -909,7 +879,7 @@ def copy_sheet(dr_config, wb, sheet_orig, label_row, sheet_name, filters, fixups
 #
 # wrapper for sending out the roster
 #
-def send_roster(dr_config, args, account, file_name, report_type, report_date):
+def send_roster(dr_config, args, account, file_name, report_type, report_date, mailing_list):
 
     warn_days = 2
     if report_date < NOW - datetime.timedelta(days=warn_days):
@@ -1009,63 +979,90 @@ def send_roster(dr_config, args, account, file_name, report_type, report_date):
 
         """)
 
-    send_report_common(dr_config, args, account, file_name, report_type, message_body)
+    send_report_common(dr_config, args, account, file_name, report_type, message_body, mailing_list)
 
 
 
 
-def send_report_common(dr_config, args, account, file_name, report_type, message_body):
-
-    #message = account.new_message(resource=dr_config.send_email)
-    message = account.new_message()
+def send_report_common(dr_config, args, account, file_name, report_type, message_body, mailing_list):
 
     if args.test_send:
-        message.bcc.add(dr_config.to_test)
+        send_report_common2(dr_config, args, account, file_name, report_type, message_body,
+                            dr_config.to_test, None, None)
+
+    if args.send:
+        for e in mailing_list:
+            if isinstance(e, str):
+                email = e
+                gap = None
+                name = None
+            else:
+                email = e['Email']
+                gap = e['GAP(s)']
+                name = e['Name']
+            send_report_common2(dr_config, args, account, file_name, report_type, message_body, email, gap, name)
+
+
+
+def send_report_common2(dr_config, args, account, file_name, report_type, message_body, email, gap, name):
+
+    message = account.new_message(resource=dr_config.send_email)
+    #message = account.new_message()
+
+    #message.to.add(email)
+    message.to.add(dr_config.to_test)
 
     #if extra_recipients != None and len(extra_recipients) > 0:
     #    log.debug(f"adding extra recipients { extra_recipients }")
 
+    name_string = f"{ name } " if name is not None else ""
+    gap_string = f"with GAP { gap }" if gap is not None else ""
+    posting = textwrap.dedent(
+            f"""
+            <p>
+            This message is being sent to { name_string }{ email }{ gap_string}.
+            Please contact <a href='{ dr_config.send_email }'>{ dr_config.send_email }</a>
+            if you do not want to receive future mailings
+            """)
+
     if args.send:
-        #if extra_recipients != None and len(extra_recipients) > 0:
-        #    message.bcc.add(extra_recipients)
-
-        message.bcc.add(dr_config.to_test)
-        message.bcc.add(dr_config.to_email)
-        log.debug(f"sending { file_name } to { dr_config.to_email }")
-        posting = f"<p>This message was sent to { dr_config.to_email }.  Please do *not* reply to the whole list</p>\n"
+        log.debug(f"sending { file_name } to { email }")
+        debug_message = ""
     else:
-        log.debug(f"not sending { file_name } to { dr_config.to_email }")
-        posting = \
-f"""
-<p>
-DEBUG Version: not sent to the list
-</p>
-"""
+        log.debug(f"debug sending { file_name } to { email }")
+        debug_message = textwrap.dedent(
+            f"""
+            <p>
+            DEBUG Version: not sent to the list
+            </p>
+            """)
 
-    message.body = \
-f"""
-<!DOCTYPE html>
-<html>
-<meta http-equiv="Content-type" content="text/html" charset="UTF8" />
-<title>DR{ dr_config.dr_id } { report_type }</title>
-</head>
-<body>
+    message.body = textwrap.dedent(
+        f"""
+        <!DOCTYPE html>
+        <html>
+        <meta http-equiv="Content-type" content="text/html" charset="UTF8" />
+        <title>DR{ dr_config.dr_id } { report_type }</title>
+        </head>
+        <body>
 
-<h1>DR{ dr_config.dr_id } { report_type }</h1>
-{ posting }
+        <h1>DR{ dr_config.dr_id } { report_type }</h1>
+        { debug_message }
+        { posting }
 
-{ message_body }
+        { message_body }
 
-</body>
-</html>
-"""
+        </body>
+        </html>
+        """)
 
 
     message.subject = file_name
     message.attachments.add( file_name )
 
     try:
-        message.send(save_to_sent_folder=True)
+        if not args.suppress_email:
+            message.send(save_to_sent_folder=True)
     except requests.RequestException as e:
         log.error(f"got an error: { e }, response json { e.response.json }")
         raise e
@@ -1076,6 +1073,7 @@ def parse_args() -> argparse.Namespace:
             description="tool to convert staffing reports into a more usefull form",
             allow_abbrev=False)
     parser.add_argument("--debug", help="turn on debugging output", action="store_true")
+    parser.add_argument("--suppress-email", help="don't actually send the email", action="store_true")
     parser.add_argument("--save", help="retain output file", action="store_true")
     parser.add_argument("--send", help="send emails out", action="store_true")
     parser.add_argument("--test-send", help="send emails out, but to the test email box", action="store_true")

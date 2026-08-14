@@ -1,9 +1,12 @@
 
+import datetime
 import io
 import logging
 import pathlib
 
+import O365.excel
 import openpyxl
+
 
 import neil_tools
 
@@ -110,6 +113,122 @@ class O365Config:
 
 
         return item
+
+
+    #
+    # save a copy of an openpyxl workbook to sharepoint/onedrive
+    #
+    def save_report_file(self, wb, file_path):
+
+        dr_folder = self.dr_folder
+
+        # step three: write the file back to the dr_folder in sharepoint
+        stream = io.BytesIO()
+        wb.save(stream)
+        content = stream.getvalue()
+        content_len = len(content)
+        stream = io.BytesIO(content)
+                                                                                                                                   # actually do the upload
+        retval = dr_folder.upload_file(dr_folder, item_name=file_path, stream=stream, stream_size=content_len)
+        log.debug(f"save_report_file: file { file_path } retval { retval }")
+
+
+    #
+    # initialize the o365.excel workbook coresponding to the Report Config spreadsheet
+    #
+
+    def init_config_wb(self, roster_file_name, roster_sps_file_name, run_date, report_date):
+
+        # get o365 DriveItem for the config workbook
+        report_config = self.report_config
+        dr_config = self.dr_config
+
+
+        # get the config workbook
+        self._config_wb = O365.excel.WorkBook(report_config, use_session=False)
+
+        # start with the report status worksheet
+        self._ws_status = self._config_wb.get_worksheet(dr_config.sheet_report_status)
+        log.debug(f"ws_status { self._ws_status }")
+                                                                                                                                   # insert a blank row so newest is on top
+        old_status_range = self._ws_status.get_range("A2:E2")
+        old_status_values = old_status_range.values
+        new_status_range = old_status_range.insert_range("down")
+
+        # and add the data
+        new_status_range.values = [[ run_date.isoformat(), report_date.isoformat(),
+                                    "Started", roster_file_name, roster_sps_file_name ]]
+        new_status_range.update()
+
+        # return the time of the last staffing report
+        last_report_date_string = old_status_values[0][1]
+        if isinstance(last_report_date_string, str) and last_report_date_string != "":
+            last_report_date = datetime.datetime.fromisoformat(last_report_date_string)
+        else:
+            last_report_date = None
+        log.debug(f"last report time: { last_report_date } str '{ last_report_date_string }'")
+        return last_report_date
+
+    #
+    # update the report status field
+    #
+
+    def update_report_status(self, new_status):
+        status_range = self._ws_status.get_range("C2:C2")
+        status_range.values = [[ new_status ]]
+        status_range.update()
+        log.debug(f"update_report_status: new status '{ new_status }'")
+
+
+
+    #
+    # initialize and clear the recipient worksheet
+    #
+
+    def init_recipient_sheet(self):
+        self._ws_recip = self._config_wb.get_worksheet(self.dr_config.sheet_current_recipients)
+        log.debug(f"ws_recip { self._ws_recip }")
+
+        recips_used_range = self._ws_recip.get_used_range()
+        recips_used_range.clear()
+
+        # build the array to update result
+        values = [ [ "Report Type", "Name", "Email", "Gap" ] ]      # title row
+
+        update_range = f"A1:D{len(values)}"
+        log.debug(f"current_recipients update range is '{ update_range }'")
+        recip_update_range = self._ws_recip.get_range(update_range)
+        recip_update_range.values = values
+        recip_update_range.update()
+
+
+    #
+    # add a batch of recipients to the recipient sheet
+    #
+
+    def update_recipient_sheet(self, mailing_list, report_type):
+
+        ws = self._ws_recip
+
+        # mailing list entries are either a str (email) or a dict with roster row data
+        values = []
+        for entry in mailing_list:
+            if type(entry) == str:
+                values.append( [ report_type, None, entry, None ] )
+            else:
+                values.append( [ report_type, entry['Name'], entry['Email'], entry['GAP(s)'] ] )
+
+        recips_used_range = ws.get_used_range()
+        row_start = recips_used_range.row_index + recips_used_range.row_count
+        col_index = recips_used_range.column_index
+        col_count = recips_used_range.column_count
+        log.debug(f"update_recipient_sheet: { report_type } row_start { row_start } col_index { col_index } col_count { col_count }")
+
+        update_range = f"A{ row_start + 1 }:D{ row_start + len(values)}"
+        log.debug(f"current_recipients update range is '{ update_range }', len { len(values) }")
+        recip_update_range = ws.get_range(update_range)
+        recip_update_range.values = values
+        recip_update_range.update()
 
 
 

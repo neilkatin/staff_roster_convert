@@ -24,7 +24,7 @@ import openpyxl.styles
 import openpyxl.styles.colors
 import openpyxl.writer.excel
 import openpyxl.utils.cell
-import O365.excel
+#import O365.excel
 
 import config as config_static
 import neil_tools
@@ -69,14 +69,19 @@ def main() -> None:
     book_out = openpyxl.Workbook()
 
     # do the 'orig' roster first so it is at the end of the list
+    sheet_name_roster0 = 'Roster0'
+    sheet_name_roster1 = 'Roster1'
+    # the cumulative roster has a bug: people assigned more than once doesn't show the current assignment.
+    # use the checked in roster instead
     sheet_orig = read_roster(book_out, ORIG_SHEET_NAME, report_dict['Staff Roster - Cumulative'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
-    sheet_roster1 = copy_sheet(dr_config, book_out, sheet_orig, STAFF_ROSTER_LABEL_ROW, "Roster1", filter_row_active, ROSTER_FIXUPS)
+    sheet_roster0 = read_roster(book_out, sheet_name_roster0, report_dict['Staff Roster - Checked In'], STAFF_ROSTER_LABEL_ROW, ROSTER_FIXUPS)
+    sheet_roster1 = copy_sheet(dr_config, book_out, sheet_roster0, STAFF_ROSTER_LABEL_ROW, sheet_name_roster1, filter_row_active, ROSTER_FIXUPS)
 
     # delete column 'I': the Released column
     # first delete the column
     sheet_roster1.delete_cols(openpyxl.utils.cell.column_index_from_string('I'), 1)
     # adjust the table size
-    sheet_name, table_range = find_table_by_name(book_out, 'Roster1')
+    sheet_name, table_range = find_table_by_name(book_out, sheet_name_roster1)
     log.debug(f"sheet { sheet_name } range { table_range }")
 
     # get the range in terms of min/max
@@ -90,15 +95,16 @@ def main() -> None:
     max_row = tuple_range[3]
     table_ref = f"{min_col}{min_row}:{max_col}{max_row}"
     log.debug(f"resizing table: table_ref '{ table_ref }'")
-    table = openpyxl.worksheet.table.Table(displayName='Roster1', ref=table_ref)
+    table = openpyxl.worksheet.table.Table(displayName=sheet_name_roster1, ref=table_ref)
     # delete the old table
-    del sheet_roster1.tables['Roster1']
+    del sheet_roster1.tables[sheet_name_roster1]
     # add the new one
     sheet_roster1.add_table(table)
 
     # and copy it to a new sheet to fix up all the column header widths
     sheet_roster = copy_sheet(dr_config, book_out, sheet_roster1, 0, "Roster", {}, ROSTER_FIXUPS)
-    del book_out['Roster1']
+    del book_out[sheet_name_roster0]
+    del book_out[sheet_name_roster1]
 
 
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
@@ -133,7 +139,7 @@ def main() -> None:
     # remove the default sheet in a new wb that we don't need
     del book_out['Sheet']
 
-    # move reoster to beginning of workbook
+    # move roster to beginning of workbook
     # we should be using workbook.move_sheet(), but that didn't seem to work
     book_out.remove(sheet_roster)
     book_out._add_sheet(sheet_roster, index=0)
@@ -153,9 +159,16 @@ def main() -> None:
     mailing_list_sps = run_gap_patterns_sps(dr_config, config_tables, book_out, 'Roster')
 
     # write out stuff to the config workbook
-    recip_ws = init_config_wb(o365_config, config_tables, roster_file_name, roster_sps_file_name, report_date_stamp)
-    update_config_wb(recip_ws, mailing_list, "Staffing")
-    update_config_wb(recip_ws, mailing_list_sps, "SPS")
+    last_report_date = o365_config.init_config_wb(roster_file_name, roster_sps_file_name, NOW, report_date)
+    if last_report_date == report_date and args.ignore_too_soon != True:
+        log.info(f"not running because report_date hasn't changed ({ report_date })")
+        o365_config.update_report_status("Too Soon")
+        return
+
+    o365_config.init_recipient_sheet()
+
+    o365_config.update_recipient_sheet(mailing_list, "Staffing")
+    o365_config.update_recipient_sheet(mailing_list_sps, "SPS")
 
     if errors:
         sys.exit(1)
@@ -172,6 +185,8 @@ def main() -> None:
     do_distribution(dr_config, args, o365_config, config_tables, book_out, "Staffing Report", roster_file_name,
                     report_date, mailing_list)
 
+    o365_config.update_report_status("Success")
+
 
 
 #
@@ -183,11 +198,11 @@ def do_distribution(dr_config, args, o365_config, config_tables, book_out, repor
     if args.send or args.test_send or args.save:
         log.debug(f"saving to { file_name }")
         book_out.save(file_name)
-        save_report_file(dr_config, o365_config, config_tables, book_out, dr_config.reports_folder_name + "/" + file_name)
+        o365_config.save_report_file(book_out, dr_config.reports_folder_name + "/" + file_name)
 
     try: 
         if args.send or args.test_send:
-            send_roster(dr_config, args, o365_config.account, file_name, "SPS Report", report_date, mailing_list)
+            send_roster(dr_config, args, o365_config.account, file_name, "Staffing Report", report_date, mailing_list)
     except:
         raise
 
@@ -267,7 +282,7 @@ def run_gap_patterns(dr_config, o365_config, config_tables, wb, roster_table_nam
             map(lambda x: x['Email'] if x['Type'] == "include" else None,
             extra_recipients)) )
 
-    log.debug(f"run_gap_patterns: people_to_include { [ x if isinstance(x, str) else x['Name'] for x in people_to_include ] }")
+    #log.debug(f"run_gap_patterns: people_to_include { [ x if isinstance(x, str) else x['Name'] for x in people_to_include ] }")
 
     run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include)
     return people_to_include
@@ -299,7 +314,12 @@ def run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, peopl
 
     for person_dict in roster_table_dicts:
         #log.debug(f"roster_table_dicts: { person_dict }")
-        email = person_dict['Email']
+        if isinstance(person_dict, str):
+            email = person_dict
+        else:
+            if 'Email' not in person_dict:
+                log.error(f"no 'Email' in person_dict '{ person_dict }'")
+            email = person_dict['Email']
 
         # if email is in extra_recipients (no matter if include or exclude) then
         # skip further processing
@@ -307,7 +327,7 @@ def run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, peopl
         # if include: they are already there
         # if exclude: prevent them from being added
         if any(filter(lambda x: x['Email'] == email, extra_recipients)):
-            log.debug(f"skipping email { email } because it is in extra_recipients")
+            #log.debug(f"skipping email { email } because it is in extra_recipients")
             continue
 
         match_per_gap(person_dict, per_gap_dicts, people_to_include)
@@ -331,10 +351,10 @@ def match_per_gap(person_dict, gap_dicts, people_to_include):
 
         if gap_re.fullmatch(gap) is not None:
             if e['Type'] == 'include':
-                log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
+                #log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
                 people_to_include.append(person_dict)
             else:
-                log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
+                #log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
                 pass
 
             # include or exclude: we're done with matching
@@ -367,96 +387,10 @@ def per_gap_dicts_to_re(gap_dicts):
         gap = re.sub(r'\*', '.*', gap)
         gap = re.sub(r'-', '/', gap)
 
-        log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
+        #log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
 
         e['re'] = re.compile(gap, re.DOTALL)
 
-
-#
-# save results to the config workbook
-#
-def init_config_wb(o365_config, config_tables, roster_file_name, roster_sps_file_name, report_date):
-
-    # get o365 DriveItem for the config workbook
-    report_config = o365_config.report_config
-    dr_config = o365_config.dr_config
-
-
-    # get the config workbook
-    o365_wb = O365.excel.WorkBook(report_config, use_session=False)
-
-    # start with the report status worksheet
-    ws_status = o365_wb.get_worksheet(dr_config.sheet_report_status)
-    log.debug(f"ws_status { ws_status }")
-
-    # insert a blank row so newest is on top
-    old_status_range = ws_status.get_range("A2:E2")
-    new_status_range = old_status_range.insert_range("down")
-    
-    # and add the data
-    new_status_range.values = [[ NOW.strftime(REPORT_DATE_FORMAT), report_date,
-                                "Success", roster_file_name, roster_sps_file_name ]]
-    new_status_range.update()
-
-    # now do the Current Recipients worksheet
-    ws_recip = o365_wb.get_worksheet(dr_config.sheet_current_recipients)
-    log.debug(f"ws_recip { ws_recip }")
-
-    recips_used_range = ws_recip.get_used_range()
-    recips_used_range.clear()
-
-    # build the array to update result
-    values = [ [ "Report Type", "Name", "Email", "Gap" ] ]      # title row
-
-    update_range = f"A1:D{len(values)}"
-    log.debug(f"current_recipients update range is '{ update_range }'")
-    recip_update_range = ws_recip.get_range(update_range)
-    recip_update_range.values = values
-    recip_update_range.update()
-
-    return ws_recip
-
-
-def update_config_wb(ws, mailing_list, report_type):
-
-    # mailing list entries are either a str (email) or a dict with roster row data
-    values = []
-    for entry in mailing_list:
-        if type(entry) == str:
-            values.append( [ report_type, None, entry, None ] )
-        else:
-            values.append( [ report_type, entry['Name'], entry['Email'], entry['GAP(s)'] ] )
-
-    recips_used_range = ws.get_used_range()
-    row_start = recips_used_range.row_index + recips_used_range.row_count
-    col_index = recips_used_range.column_index
-    col_count = recips_used_range.column_count
-    log.debug(f"update_config_wb: { report_type } row_start { row_start } col_index { col_index } col_count { col_count }")
-
-    update_range = f"A{ row_start + 1 }:D{ row_start + len(values)}"
-    log.debug(f"current_recipients update range is '{ update_range }', len { len(values) }")
-    recip_update_range = ws.get_range(update_range)
-    recip_update_range.values = values
-    recip_update_range.update()
-
-
-#
-# not working since you can't write to a file that is open somewhere
-#
-def save_report_file(dr_config, o365_config, config_tables, wb, file_path):
-
-    dr_folder = o365_config.dr_folder
-
-    # step three: write the file back to the dr_folder in sharepoint
-    stream = io.BytesIO()
-    wb.save(stream)
-    content = stream.getvalue()
-    content_len = len(content)
-    stream = io.BytesIO(content)
-
-    # actually do the upload
-    retval = dr_folder.upload_file(dr_folder, item_name=file_path, stream=stream, stream_size=content_len)
-    log.debug(f"save_report_file: file { file_path } retval { retval }")
 
 
 
@@ -893,7 +827,6 @@ def send_roster(dr_config, args, account, file_name, report_type, report_date, m
         date_warning = ""
 
     if report_type == "SPS Report":
-        pass
         sps_section = textwrap.dedent(
                 f"""
                 <p>
@@ -1074,6 +1007,7 @@ def parse_args() -> argparse.Namespace:
             allow_abbrev=False)
     parser.add_argument("--debug", help="turn on debugging output", action="store_true")
     parser.add_argument("--suppress-email", help="don't actually send the email", action="store_true")
+    parser.add_argument("--ignore-too-soon", help="run even if there is no new staff report", action="store_true")
     parser.add_argument("--save", help="retain output file", action="store_true")
     parser.add_argument("--send", help="send emails out", action="store_true")
     parser.add_argument("--test-send", help="send emails out, but to the test email box", action="store_true")

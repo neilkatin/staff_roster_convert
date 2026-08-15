@@ -112,7 +112,7 @@ def main() -> None:
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
     read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
     read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C", suppress_columns={'V':True})
-    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
+    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 4, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
     sps_sheets = {
         "Late_Checkin": filter_row_checkin,
@@ -199,8 +199,9 @@ def main() -> None:
 #
 def generate_contact_sheet(dr_config, roster_table_dicts, wb, contact_sheet_name):
 
-    late_checkin_sheet = wb['Arrival']
-    ws = wb.create_sheet(contact_sheet_name, wb.index(late_checkin_sheet))
+    # put this before the arrival sheet
+    arrival_sheet = wb['Arrival']
+    ws = wb.create_sheet(contact_sheet_name, wb.index(arrival_sheet))
     ws.sheet_properties.tabColor = SHEET_COLOR
 
     # tiny helper function to set cell contents
@@ -729,7 +730,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols }")
+    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols } label_row { label_row }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
@@ -782,6 +783,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
     # make a table if there is data
+    log.debug(f"about to add table: sheet { sheet_name } sheet_orig.max_row { sheet_orig.max_row } label_row { label_row }")
     if sheet_orig.max_row > label_row:
         last_col_letter = openpyxl.utils.get_column_letter(sheet_orig.max_column)
         table_ref = f"A{label_row + 1}:{ last_col_letter }{ sheet_orig.max_row }"

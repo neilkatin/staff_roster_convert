@@ -730,7 +730,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols } label_row { label_row }")
+    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols } label_row { label_row }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
@@ -783,7 +783,7 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
     # make a table if there is data
-    log.debug(f"about to add table: sheet { sheet_name } sheet_orig.max_row { sheet_orig.max_row } label_row { label_row }")
+    #log.debug(f"about to add table: sheet { sheet_name } sheet_orig.max_row { sheet_orig.max_row } label_row { label_row }")
     if sheet_orig.max_row > label_row:
         last_col_letter = openpyxl.utils.get_column_letter(sheet_orig.max_column)
         table_ref = f"A{label_row + 1}:{ last_col_letter }{ sheet_orig.max_row }"

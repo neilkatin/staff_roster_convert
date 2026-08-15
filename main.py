@@ -38,6 +38,8 @@ STAFF_ROSTER_LABEL_ROW = 5
 ORIG_SHEET_NAME = "Orig"
 REPORT_DATE_FORMAT = "%Y-%m-%d %H-%M-%S %Z"
 
+SHEET_COLOR = '99ff99'
+
 
 NOW = datetime.datetime.now().astimezone()
 NOW_NO_TZ = datetime.datetime.now()
@@ -132,7 +134,7 @@ def main() -> None:
 
     # make all the SPS sheets
     for sheet_name, filter in sps_sheets.items():
-        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS, sheet_color='99ff99')
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS, sheet_color=SHEET_COLOR)
     for sheet_name, filter in all_sheets.items():
         copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
 
@@ -155,8 +157,9 @@ def main() -> None:
         config_tables[table_name] = read_table_to_dict(o365_config.config_wb, table_name)
 
     # now figure out who we should send to
-    mailing_list = run_gap_patterns(dr_config, o365_config, config_tables, book_out, 'Roster')
-    mailing_list_sps = run_gap_patterns_sps(dr_config, config_tables, book_out, 'Roster')
+    roster_table_dicts = read_table_to_dict(book_out, 'Roster')
+    mailing_list = run_gap_patterns(dr_config, o365_config, config_tables, roster_table_dicts)
+    mailing_list_sps = run_gap_patterns_sps(dr_config, config_tables, roster_table_dicts)
 
     # write out stuff to the config workbook
     last_report_date = o365_config.init_config_wb(roster_file_name, roster_sps_file_name, NOW, report_date)
@@ -164,6 +167,8 @@ def main() -> None:
         log.info(f"not running because report_date hasn't changed ({ report_date })")
         o365_config.update_report_status("Too Soon")
         return
+
+    generate_contact_sheet(dr_config, roster_table_dicts, book_out, "Contacts")
 
     o365_config.init_recipient_sheet()
 
@@ -190,6 +195,67 @@ def main() -> None:
 
 
 #
+# generate a contact sheet that can be imported to google contacts
+#
+def generate_contact_sheet(dr_config, roster_table_dicts, wb, contact_sheet_name):
+
+    late_checkin_sheet = wb['Arrival']
+    ws = wb.create_sheet(contact_sheet_name, wb.index(late_checkin_sheet))
+    ws.sheet_properties.tabColor = SHEET_COLOR
+
+    # tiny helper function to set cell contents
+    def set_cell_value(row, col, value):
+        ws.cell(row=row, column=col +1).value = value
+
+
+    title_row = [ 'Name Prefix', 'First Name', 'Middle Name', 'Last Name', 'Name Suffix',
+                 'Phonetic First Name', 'Phonetic Middle Name', 'Phonetic Last Name', 'Nickname',
+                 'File As', 'E-mail 1 - Label', 'E-mail 1 - Value', 'Phone 1 - Label', 'Phone 1 - Value',
+                 'Address 1 - Label', 'Address 1 - Country', 'Address 1 - Street', 'Address 1 - Extended Address',
+                 'Address 1 - City', 'Address 1 - Region', 'Address 1 - Postal Code',
+                 'Address 1 - PO Box', 'Organization Name', 'Organization Title', 'Organization Department',
+                 'Birthday', 'Event 1 - Label', 'Event 1 - Value', 'Relation 1 - Label', 'Relation 1 - Value',
+                 'Website 1 - Label', 'Website 1 - Value', 'Custom Field 1 - Label', 'Custom Field 1 - Value',
+                 'Notes', 'Labels' ]
+
+    for idx, value in enumerate(title_row):
+        set_cell_value(1, idx, value)
+
+    title_dict = spreadsheet_tools.title_to_dict(title_row)
+
+    db_data = [ title_row ]
+    row_num = 1
+
+    for roster_dict in roster_table_dicts:
+        row_num += 1
+        name = roster_dict['Name']
+        split = name.split(',')
+        last_name = split[0].strip()
+        first_name = split[1].strip()
+        preferred_name = roster_dict['Preferred name']
+        email = roster_dict['Email']
+        phone = roster_dict['Cell phone']
+
+        # don't bother adding if cell phone is blank
+        if phone == '':
+            continue
+
+        # initialize the new row with the right number of elements
+        #new_row = [ '' for x in range(len(title_row)) ]
+
+        # set the data we care about
+        set_cell_value(row_num, title_dict['First Name'], first_name)
+        set_cell_value(row_num, title_dict['Last Name'], last_name)
+        set_cell_value(row_num, title_dict['Nickname'], preferred_name)
+        set_cell_value(row_num, title_dict['E-mail 1 - Label'], "Main")
+        set_cell_value(row_num, title_dict['E-mail 1 - Value'], email)
+        set_cell_value(row_num, title_dict['Phone 1 - Label'], "Mobile")
+        set_cell_value(row_num, title_dict['Phone 1 - Value'], phone)
+        set_cell_value(row_num, title_dict['Labels'], dr_config.dr_id)
+
+
+
+#
 # common code for sending both the SPS reports and the regular reports
 #
 
@@ -202,7 +268,7 @@ def do_distribution(dr_config, args, o365_config, config_tables, book_out, repor
 
     try: 
         if args.send or args.test_send:
-            send_roster(dr_config, args, o365_config.account, file_name, "Staffing Report", report_date, mailing_list)
+            send_roster(dr_config, args, o365_config.account, file_name, report_name, report_date, mailing_list)
     except:
         raise
 
@@ -270,10 +336,8 @@ def all_none(row):
 # go through the config spreadsheet and figure out who this report should be sent to
 #
 
-def run_gap_patterns(dr_config, o365_config, config_tables, wb, roster_table_name):
+def run_gap_patterns(dr_config, o365_config, config_tables, roster_table_dicts):
 
-    roster_table_dicts = read_table_to_dict(wb, roster_table_name)
-    config_wb = o365_config.config_wb
     per_gap_dicts = config_tables[dr_config.table_per_gap]
     extra_recipients = config_tables[dr_config.table_extra_recipients]
 
@@ -292,8 +356,7 @@ def run_gap_patterns(dr_config, o365_config, config_tables, wb, roster_table_nam
 # hard coded SPS gap patterns
 #
 
-def run_gap_patterns_sps(dr_config, config_tables, wb, roster_table_name):
-    roster_table_dicts = read_table_to_dict(wb, roster_table_name)
+def run_gap_patterns_sps(dr_config, config_tables, roster_table_dicts):
     per_gap_dicts = [ { 'Type': 'include', 'GAP': 'wf-sps-*' }, { 'Type': 'include', 'GAP': 'om-wf-ad' } ]
     extra_recipients = []
     people_to_include = []
@@ -557,7 +620,7 @@ def row_fixups(fixup_defs, label_row, supress_columns):
         col_letter = openpyxl.utils.get_column_letter(c +1)
         if col_letter in supress_columns:
             # skip this column
-            #log.debug(f"read_roster: suppressing columm '{ col_letter }' c { c } output_column { output_column }")
+            #log.debug(f"row_fixups: suppressing columm '{ col_letter }' c { c } output_column { output_column }")
             continue
 
 
@@ -858,6 +921,12 @@ def send_roster(dr_config, args, account, file_name, report_type, report_date, m
                     <p>
                     Late_checkin show people who haven't done a daily checkin in more than
                     { dr_config.late_checkin_threshold } days
+                    </p>
+
+                    <p>
+                    The Contacts sheet is a bit different.  This can be exported as a CSV file and then
+                    imported into Google contacts.  This will give phone number to name mapping for the
+                    Google ecosystem.
                     </p>
                 </div>
 

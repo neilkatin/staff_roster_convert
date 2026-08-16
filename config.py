@@ -20,10 +20,6 @@ SHEET_EXTRA_RECIPIENTS = 'Extra Recipients'
 SHEET_CURRENT_RECIPIENTS = 'Current Recipients'
 SHEET_REPORT_STATUS = 'Report Status'
 
-# named tables
-TABLE_PER_GAP = 'PerGap'
-TABLE_EXTRA_RECIPIENTS = 'ExtraRecipients'
-
 # default value for daily checkin nags
 LATE_CHECKIN_THRESHOLD = 3
 
@@ -51,9 +47,6 @@ class DRConfig:
         self._sheet_extra_recipients = SHEET_EXTRA_RECIPIENTS
         self._sheet_current_recipients = SHEET_CURRENT_RECIPIENTS
         self._sheet_report_status = SHEET_REPORT_STATUS
-
-        self._table_per_gap = TABLE_PER_GAP
-        self._table_extra_recipients = TABLE_EXTRA_RECIPIENTS
 
         self._subject_match_string = subject_match_string
 
@@ -128,14 +121,6 @@ class DRConfig:
     @property
     def sheet_report_status(self):
         return self._sheet_report_status
-
-    @property
-    def table_per_gap(self):
-        return self._table_per_gap
-
-    @property
-    def table_extra_recipients(self):
-        return self._table_extra_recipients
 
     @property
     def subject_match_string(self):

@@ -62,6 +62,9 @@ def main() -> None:
 
     o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
 
+    # set up o365_config early, so we can add retrying failed transactions
+    o365_config = o365_staffing.O365Config(dr_config, o365.account)
+
     report_dict = o365.fetch_workforce_reports(dr_config.dr_id, subject_match_string=dr_config.subject_match_string)
     report_date = report_dict['created']
     report_date_stamp = report_date.strftime(REPORT_DATE_FORMAT)
@@ -83,12 +86,13 @@ def main() -> None:
     # first delete the column
     sheet_roster1.delete_cols(openpyxl.utils.cell.column_index_from_string('I'), 1)
     # adjust the table size
-    sheet_name, table_range = find_table_by_name(book_out, sheet_name_roster1)
+    sheet_name, table_range = o365_config.find_table_by_name(sheet_name_roster1, wb=book_out)
     log.debug(f"sheet { sheet_name } range { table_range }")
 
     # get the range in terms of min/max
     # tuple is min_col, min_row, max_col, max_row
     tuple_range = openpyxl.utils.cell.range_boundaries(table_range)
+
     log.debug(f"table range_boundaries { tuple_range }")
     # convert back to A1:Z999 style format, reducing the max column by one for the deleted column
     min_col = openpyxl.utils.get_column_letter(tuple_range[0])
@@ -150,16 +154,10 @@ def main() -> None:
     roster_file_name = f"DR{ dr_config.dr_id } Staffing Report { report_date_stamp }.xlsx"
     roster_sps_file_name = f"DR{ dr_config.dr_id } SPS Report { report_date_stamp }.xlsx"
 
-    o365_config = o365_staffing.O365Config(dr_config, o365.account)
-    config_tables = { 'o365_config': o365_config}
-    # get the by-gap table
-    for table_name in [ dr_config.table_per_gap, dr_config.table_extra_recipients ]:
-        config_tables[table_name] = read_table_to_dict(o365_config.config_wb, table_name)
-
     # now figure out who we should send to
-    roster_table_dicts = read_table_to_dict(book_out, 'Roster')
-    mailing_list = run_gap_patterns(dr_config, o365_config, config_tables, roster_table_dicts)
-    mailing_list_sps = run_gap_patterns_sps(dr_config, config_tables, roster_table_dicts)
+    roster_table_dicts = o365_config.read_table_to_dict('Roster', wb=book_out)
+    mailing_list = o365_config.run_gap_patterns(roster_table_dicts)
+    mailing_list_sps = o365_config.run_gap_patterns_sps(roster_table_dicts)
 
     # write out stuff to the config workbook
     last_report_date = o365_config.init_config_wb(roster_file_name, roster_sps_file_name, NOW, report_date)
@@ -179,7 +177,7 @@ def main() -> None:
         sys.exit(1)
 
     # send to SPS
-    do_distribution(dr_config, args, o365_config, config_tables, book_out, "SPS Report", roster_sps_file_name,
+    do_distribution(dr_config, args, o365_config, book_out, "SPS Report", roster_sps_file_name,
                     report_date, mailing_list_sps)
 
     # send the regular roster out
@@ -187,7 +185,7 @@ def main() -> None:
         # delete the sps sheet
         del book_out[sheet_name]
 
-    do_distribution(dr_config, args, o365_config, config_tables, book_out, "Staffing Report", roster_file_name,
+    do_distribution(dr_config, args, o365_config, book_out, "Staffing Report", roster_file_name,
                     report_date, mailing_list)
 
     o365_config.update_report_status("Success")
@@ -260,7 +258,7 @@ def generate_contact_sheet(dr_config, roster_table_dicts, wb, contact_sheet_name
 # common code for sending both the SPS reports and the regular reports
 #
 
-def do_distribution(dr_config, args, o365_config, config_tables, book_out, report_name, file_name, report_date, mailing_list):
+def do_distribution(dr_config, args, o365_config, book_out, report_name, file_name, report_date, mailing_list):
 
     if args.send or args.test_send or args.save:
         log.debug(f"saving to { file_name }")
@@ -277,185 +275,6 @@ def do_distribution(dr_config, args, o365_config, config_tables, book_out, repor
         if not args.save and (args.send or args.test_send):
             log.debug(f"removing { file_name }")
             os.remove(file_name)
-
-
-#
-# run through all the sheets, looking for the specified table.
-#
-# return the sheet name and the table range
-#
-
-def find_table_by_name(wb, name):
-    for ws in wb.worksheets:
-        for table_name, table_range in ws.tables.items():
-            if name == table_name:
-                return ws.title, table_range
-    return None, None
-
-
-#
-# read a table into a dict, with the keys being the table headers
-#
-
-def read_table_to_dict(wb, table_name):
-
-    # find the table
-    sheet_name, table_range = find_table_by_name(wb, table_name)
-    #log.debug(f"table { table_name } sheet { sheet_name } range { table_range }")
-
-    # get the range in terms of min/max
-    # tuple is min_col, min_row, max_col, max_row
-    tuple_range = openpyxl.utils.cell.range_boundaries(table_range)
-    #log.debug(f"table range_boundaries { tuple_range }")
-
-    ws = wb[sheet_name]
-
-    row_list = []
-    for row in ws.iter_rows(
-            min_col=tuple_range[0], min_row=tuple_range[1],
-            max_col=tuple_range[2], max_row=tuple_range[3], values_only=True):
-        
-        if not all_none(row):
-            row_list.append(row)
-
-    #log.debug(f"row_list: { row_list }")
-
-    table_dict = spreadsheet_tools.matrix_to_object_array(row_list)
-    #log.debug(f"table_dict: { table_dict }")
-
-    return table_dict
-
-#
-# returns True if all elements in a list are None
-#
-
-def all_none(row):
-    return all(x is None for x in row)
-
-
-#
-# go through the config spreadsheet and figure out who this report should be sent to
-#
-
-def run_gap_patterns(dr_config, o365_config, config_tables, roster_table_dicts):
-
-    per_gap_dicts = config_tables[dr_config.table_per_gap]
-    extra_recipients = config_tables[dr_config.table_extra_recipients]
-
-    # start by including everyone on the Extra Recipients list who is "include"
-    people_to_include = list( filter(lambda x: x is not None,
-            map(lambda x: x['Email'] if x['Type'] == "include" else None,
-            extra_recipients)) )
-
-    #log.debug(f"run_gap_patterns: people_to_include { [ x if isinstance(x, str) else x['Name'] for x in people_to_include ] }")
-
-    run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include)
-    return people_to_include
-
-
-#
-# hard coded SPS gap patterns
-#
-
-def run_gap_patterns_sps(dr_config, config_tables, roster_table_dicts):
-    per_gap_dicts = [ { 'Type': 'include', 'GAP': 'wf-sps-*' }, { 'Type': 'include', 'GAP': 'om-wf-ad' } ]
-    extra_recipients = []
-    people_to_include = []
-
-    run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include)
-
-    log.debug(f"run_gap_patterns_sps: people_to_include { [ x['Name'] for x in people_to_include ] }")
-    return people_to_include
-
-
-#
-# split off common code to compute SPS recipients
-#
-
-def run_gap_patterns2(per_gap_dicts, roster_table_dicts, extra_recipients, people_to_include):
-
-    per_gap_dicts_to_re(per_gap_dicts)
-
-    for person_dict in roster_table_dicts:
-        #log.debug(f"roster_table_dicts: { person_dict }")
-        if isinstance(person_dict, str):
-            email = person_dict
-        else:
-            if 'Email' not in person_dict:
-                log.error(f"no 'Email' in person_dict '{ person_dict }'")
-            email = person_dict['Email']
-
-        # if email is in extra_recipients (no matter if include or exclude) then
-        # skip further processing
-        #
-        # if include: they are already there
-        # if exclude: prevent them from being added
-        if any(filter(lambda x: x['Email'] == email, extra_recipients)):
-            #log.debug(f"skipping email { email } because it is in extra_recipients")
-            continue
-
-        match_per_gap(person_dict, per_gap_dicts, people_to_include)
-
-    log.debug(f"after gap filtering: including { len(people_to_include) } people")
-    people_to_include
-
-#
-# see if we should include this email based on the gap of the person
-#
-def match_per_gap(person_dict, gap_dicts, people_to_include):
-
-    email = person_dict['Email']
-
-
-    # gap may be a comma separated list of GAPs.  Just take the first one
-    gap = person_dict['GAP(s)'].split(sep=',')[0]
-
-    for e in gap_dicts:
-        gap_re = e['re']
-
-        if gap_re.fullmatch(gap) is not None:
-            if e['Type'] == 'include':
-                #log.debug(f"Including { email } gap { gap } based on { e['GAP'] }")
-                people_to_include.append(person_dict)
-            else:
-                #log.debug(f"Excluding { email } gap { gap } based on { e['GAP'] }")
-                pass
-
-            # include or exclude: we're done with matching
-            return
-
-
-    #log.debug(f"no match for { email } gap { gap }") 
-
-
-
-#
-# go through all the per-gap-dict entries and turn the glob expressions into
-# compiled regular expressions
-#
-
-def per_gap_dicts_to_re(gap_dicts):
-
-    for e in gap_dicts:
-        #log.debug(f"per_gap_dicts_to_re: e { e }")
-        gap = e['GAP']
-
-        # we have something that looks like 'om-*' or 'mc-sh-mn'
-        # steps to do:
-        #    upper case everything
-        #    turn - to /
-        #    turn * to .*
-        #    anchor at end to match whole string
-        orig_gap = gap
-        gap = gap.upper()
-        gap = re.sub(r'\*', '.*', gap)
-        gap = re.sub(r'-', '/', gap)
-
-        #log.debug(f"orig_gap '{ orig_gap }' gap '{ gap }'")
-
-        e['re'] = re.compile(gap, re.DOTALL)
-
-
 
 
 #

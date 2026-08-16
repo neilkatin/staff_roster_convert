@@ -29,7 +29,8 @@ import openpyxl.utils.cell
 import config as config_static
 import neil_tools
 import arc_o365
-import o365_staffing
+#import o365_staffing
+from arc_o365 import configuration
 from neil_tools import spreadsheet_tools
 
 
@@ -63,7 +64,7 @@ def main() -> None:
     o365 = arc_o365.arc_o365.arc_o365(config, token_filename=config.TOKEN_FILENAME, timezone="America/Los_Angeles")
 
     # set up o365_config early, so we can add retrying failed transactions
-    o365_config = o365_staffing.O365Config(dr_config, o365.account)
+    o365_config = configuration.O365Config(dr_config, o365.account)
 
     report_dict = o365.fetch_workforce_reports(dr_config.dr_id, subject_match_string=dr_config.subject_match_string)
     report_date = report_dict['created']

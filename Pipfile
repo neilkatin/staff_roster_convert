@@ -8,6 +8,7 @@ xlrd = "*"
 openpyxl = "*"
 dotenv = "*"
 o365 = "*"
+requests = "*"
 
 [dev-packages]
 

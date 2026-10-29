@@ -114,6 +114,7 @@ def main() -> None:
     del book_out[sheet_name_roster1]
 
 
+    # temporary removal 2026-10-29 Neil
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
     read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
     read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C", suppress_columns={'V':True})
@@ -138,10 +139,10 @@ def main() -> None:
         }
 
     # make all the SPS sheets
-    for sheet_name, filter in sps_sheets.items():
-        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS, sheet_color=SHEET_COLOR)
-    for sheet_name, filter in all_sheets.items():
-        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, filter, ROSTER_FIXUPS)
+    for sheet_name, sheet_filter in sps_sheets.items():
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, sheet_filter, ROSTER_FIXUPS, sheet_color=SHEET_COLOR)
+    for sheet_name, sheet_filter in all_sheets.items():
+        copy_sheet(dr_config, book_out, sheet_roster, 0, sheet_name, sheet_filter, ROSTER_FIXUPS)
 
     # remove the default sheet in a new wb that we don't need
     del book_out['Sheet']
@@ -167,6 +168,7 @@ def main() -> None:
         o365_config.update_report_status("Too Soon")
         return
 
+    # temporary removal 2026-10-29 Neil
     generate_contact_sheet(dr_config, roster_table_dicts, book_out, "Contacts")
 
     o365_config.init_recipient_sheet()
@@ -181,8 +183,10 @@ def main() -> None:
     do_distribution(dr_config, args, o365_config, book_out, "SPS Report", roster_sps_file_name,
                     report_date, mailing_list_sps)
 
-    # send the regular roster out
-    for sheet_name, filter in sps_sheets.items():
+    # send the regular roster out by deleting the special SPS sheets, plus the Contacts sheet
+    t = list(sps_sheets.keys())
+    t.append('Contacts')
+    for sheet_name in t:
         # delete the sps sheet
         del book_out[sheet_name]
 
@@ -550,14 +554,14 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
     book_in = xlrd.open_workbook(file_contents=file_contents)
     sheet_in = book_in.sheet_by_index(0)
 
-    #log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols } label_row { label_row }")
+    log.debug(f"sheet name { sheet_in.name } rows { sheet_in.nrows } cols { sheet_in.ncols } label_row { label_row }")
 
     #for col in range(0, sheet.ncols):
     #    cell_value = sheet.cell_value(label_row, col)
     #    log.debug(f"cell({ label_row }, { col }) = { cell_value }")
 
     label_values = sheet_in.row_values(label_row)
-    #log.debug(f"label_values: { label_values }")
+    log.debug(f"label_values: { label_values }")
 
 
     # copy everything to a clean workbook
@@ -603,8 +607,8 @@ def read_roster(book_out, sheet_name, file_contents: str, label_row: int, fixups
 
 
     # make a table if there is data
-    #log.debug(f"about to add table: sheet { sheet_name } sheet_orig.max_row { sheet_orig.max_row } label_row { label_row }")
-    if sheet_orig.max_row > label_row:
+    log.debug(f"about to add table: sheet { sheet_name } sheet_orig.max_row { sheet_orig.max_row } label_row { label_row }")
+    if sheet_orig.max_row > label_row +1:
         last_col_letter = openpyxl.utils.get_column_letter(sheet_orig.max_column)
         table_ref = f"A{label_row + 1}:{ last_col_letter }{ sheet_orig.max_row }"
         log.debug(f"adding table: table '{ sheet_name }' table_ref '{ table_ref }'")

@@ -3,7 +3,7 @@
 TOKEN_FILENAME = 'o365_token.txt'
 
 PROGRAM_EMAIL = 'DR-Report-Automation@redcross.org'
-EMAIL_TO_TEST = 'generic@askneil.com'
+EMAIL_TO_TEST = 'neil@askneil.com'
 
 SHAREPOINT_SITE = 'americanredcross.sharepoint.com'
 TEMPLATE_PATH = '/teams/dr-staffing-reports'

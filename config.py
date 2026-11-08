@@ -138,6 +138,7 @@ class DRConfig:
 
 
 # now create the DROs
-DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce', 'dr458-26staffing@redcross.org', subject_match_string='DR458-2026Automated Workforce Reports')
-DRConfig('646-2027', 'neil.katin@redcross.org', '/teams/dr-staffing-reports', 'dr646-27lcv@redcross.org', subject_match_string='DR 646-27 Automated Workforce Reports')
+#DRConfig('458-2026', 'neil.katin@redcross.org', '/teams/DR458-26NWRegionWildfires-Workforce', 'dr458-26staffing@redcross.org', subject_match_string='DR458-2026Automated Workforce Reports')
+#DRConfig('646-2027', 'neil.katin@redcross.org', '/teams/dr-staffing-reports', 'dr646-27lcv@redcross.org', subject_match_string='DR 646-27 Automated Workforce Reports')
 
+DRConfig('705-2027', 'neil.katin@redcross.org', '/teams/dr-staffing-reports', 'neil.katin@redcross.org', subject_match_string='DR 705-27 Automated Workforce Reports', dr_folder_name='Report Automation 705-27')

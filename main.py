@@ -118,7 +118,7 @@ def main() -> None:
     read_roster(book_out, 'StaffRequests', report_dict['Open Staff Requests'], 1, ROSTER_FIXUPS)
     read_roster(book_out, 'Shifts', report_dict['DRO Shift Tool - Shift Registrant Details'], 3, SHIFTS_FIXUPS)
     read_roster(book_out, 'Air', report_dict['Air Travel Roster'], 2, AIR_FIXUPS, freeze_col="C", suppress_columns={'V':True})
-    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 4, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
+    read_roster(book_out, 'Arrival', report_dict['Arrival Roster'], 5, ARRIVAL_FIXUPS, suppress_columns={'Z':True})
 
     sps_sheets = {
         "Late_Checkin": filter_row_checkin,
@@ -133,6 +133,7 @@ def main() -> None:
         "WF": filter_row_wf,
         "IP": filter_row_ip,
         "ER": filter_row_er,
+        "DST": filter_row_log,
         "LOG": filter_row_log,
         "CC": filter_row_cc,
         "MC": filter_row_mc,
@@ -187,8 +188,9 @@ def main() -> None:
     t = list(sps_sheets.keys())
     t.append('Contacts')
     for sheet_name in t:
-        # delete the sps sheet
-        del book_out[sheet_name]
+        # delete the sps sheets
+        if sheet_name in book_out:
+            del book_out[sheet_name]
 
     do_distribution(dr_config, args, o365_config, book_out, "Staffing Report", roster_file_name,
                     report_date, mailing_list)

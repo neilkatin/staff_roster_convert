@@ -133,7 +133,7 @@ def main() -> None:
         "WF": filter_row_wf,
         "IP": filter_row_ip,
         "ER": filter_row_er,
-        "DST": filter_row_log,
+        "DST": filter_row_dst,
         "LOG": filter_row_log,
         "CC": filter_row_cc,
         "MC": filter_row_mc,
@@ -514,6 +514,7 @@ filter_row_sms = { 'Texts?': lambda x: x != 'opt-in' }
 filter_row_mc = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('MC/') }
 filter_row_cc = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('CC/') }
 filter_row_log = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('LOG/') }
+filter_row_dst = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('DST/') }
 filter_row_er = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('ER/') }
 filter_row_ip = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('IP/') }
 filter_row_wf = { 'GAP(s)': lambda x: isinstance(x, str) and x.startswith('WF/') }

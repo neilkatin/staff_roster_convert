@@ -840,11 +840,7 @@ def send_report_common2(dr_config, args, account, file_name, report_type, messag
     message = account.new_message(resource=dr_config.send_email)
     #message = account.new_message()
 
-    #message.to.add(email)
-    message.to.add(dr_config.to_test)
-
-    #if extra_recipients != None and len(extra_recipients) > 0:
-    #    log.debug(f"adding extra recipients { extra_recipients }")
+    message.to.add(email)
 
     name_string = f"{ name } " if name is not None else ""
     gap_string = f"with GAP { gap }" if gap is not None else ""
